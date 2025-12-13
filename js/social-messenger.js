@@ -20,7 +20,7 @@
 
   // Firebase 설정: social-chat-firebase.js 와 동일
   var FIREBASE_CONFIG = {
-    apiKey: "AIzaSyCALueOFTz3SJ4wnfyDlssqK9jmu3FyV-U",
+    apiKey: "__FIREBASE_API_KEY__",
     authDomain: "web-ghost-c447b.firebaseapp.com",
     databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
     projectId: "web-ghost-c447b",
@@ -905,7 +905,21 @@ var NotifySetting = (function () {
 
   // signals 수신에 따라 현재 방의 최근글(30개)만 '짧게' 갱신 (속도/혼선 방지)
   var __roomRefreshTimer = null;
-  function scheduleRoomRefresh(roomId) {
+  
+
+function isVisitedRoomForNotify(roomId) {
+  try {
+    if (!roomId) return false;
+    if (String(roomId) === "global") return true;
+    var raw = localStorage.getItem("ghostRoomVisited_v1");
+    if (!raw) return false;
+    var map = JSON.parse(raw) || {};
+    return !!map[String(roomId)];
+  } catch (e) {
+    return false;
+  }
+}
+function scheduleRoomRefresh(roomId) {
     try {
       if (!roomId) return;
       if (!currentRoomId) return;
@@ -1653,6 +1667,19 @@ onPickImage: async function () {
                   // 현재 열려있는 방이면 알림 생략
                   if (info && info.roomId && currentRoomId && info.roomId === currentRoomId) return;
 
+
+// 방문(입장)하지 않은 방은 알림/소리/점 표시를 하지 않음
+try {
+  if (!isVisitedRoomForNotify(info.roomId)) return;
+} catch (eV) {}
+
+                  // 방 목록에 "새 글"(미확인) 표시
+                  try {
+                    if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
+                      window.RoomUnreadBadge.mark(info.roomId, info.ts);
+                    }
+                  } catch (eBadge) {}
+
                   if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
                     NotifySound.playDdiring();
                     if (NotifySetting.maybeShow) {
@@ -1702,6 +1729,13 @@ attachEvents();
     }
 
     switchRoom(initialRoomId, { room_id: initialRoomId, name: initialRoomName || (initialRoomId === "global" ? "전체 대화방" : "대화방"), is_global: (initialRoomId === "global"), can_leave: (initialRoomId !== "global") });
+
+    // 시작 시 현재 방은 이미 보고 있는 상태로 간주 → 미확인 표시 제거
+    try {
+      if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") {
+        window.RoomUnreadBadge.clear(initialRoomId);
+      }
+    } catch (eBadgeInit) {}
   }
 
   if (document.readyState === "loading") {
