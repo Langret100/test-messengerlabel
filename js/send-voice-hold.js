@@ -53,9 +53,6 @@
       } catch (e) {}
     }
 
-      } catch (e) {}
-    }
-
     function startVoice() {
       if (!Rec) {
         toast("이 브라우저는 음성인식을 지원하지 않아요.");
