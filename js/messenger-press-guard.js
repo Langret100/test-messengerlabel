@@ -1,89 +1,78 @@
 /* ============================================================
-   [messenger-press-guard.js] 메신저 버튼 롱프레스/우클릭 메뉴 방지
+   [messenger-press-guard.js] 메신저 버튼 롱프레스(길게 누름) 보호
    ------------------------------------------------------------
-   - 메신저 입력창의 버튼(😊 / + / 보내기)과 + 첨부 메뉴 버튼을
-     '꾹 누르기(롱프레스)' 또는 마우스 우클릭 시
-     파란 하이라이트(탭 하이라이트) 및 컨텍스트 메뉴가 뜨는 현상을
-     기능 손상 없이 최소 범위로 차단합니다.
-   - 일반 탭/클릭 동작(전송/패널 열기 등)은 그대로 유지합니다.
-
-   [적용 대상]
-   - games/social-messenger.html 의 .messenger-input-bar 내부 버튼
-   - + 첨부 메뉴(.msg-attach-menu) 내부 버튼(.msg-attach-item)
+   - 메신저 창 안의 버튼(😊 / ＋ / 보내기 / 팝업 메뉴 버튼 등)을
+     '꾹 누를 때' 발생하는
+       1) 파란 하이라이트(탭 하이라이트/active)
+       2) 컨텍스트(우클릭) 메뉴
+     를 차단합니다.
+   - 일반 탭/클릭 동작은 그대로 유지합니다.
 
    [제거 시 함께 삭제/정리할 요소]
-   1) js/messenger-press-guard.js
-   2) games/social-messenger.html 의 <script src="../js/messenger-press-guard.js"></script>
+   1) games/social-messenger.html 에서 본 스크립트 include 제거
+      - <script src="../js/messenger-press-guard.js"></script>
    ============================================================ */
 
 (function () {
-  if (window.__WG_MESSENGER_PRESS_GUARD__) return;
-  window.__WG_MESSENGER_PRESS_GUARD__ = true;
-
-  var TARGET_SELECTOR = [
-    ".messenger-input-bar button",
-    ".msg-attach-menu .msg-attach-item"
-  ].join(",");
-
-  function ensureStyleOnce() {
-    if (document.getElementById("wgPressGuardStyle")) return;
-    var style = document.createElement("style");
-    style.id = "wgPressGuardStyle";
-    style.textContent = [
-      TARGET_SELECTOR + "{",
-      "-webkit-tap-highlight-color: transparent;",
-      "-webkit-touch-callout: none;",
-      "-webkit-user-select: none;",
-      "user-select: none;",
-      "touch-action: manipulation;",
-      "}",
-      TARGET_SELECTOR + ":focus{outline:none;}"
-    ].join("");
-    document.head.appendChild(style);
+  function inMessenger(el) {
+    try { return !!(el && el.closest && el.closest(".messenger-shell")); } catch (e) {}
+    return false;
   }
 
-  function isTarget(el) {
+  function isButtonish(el) {
     try {
-      if (!el) return false;
-      var t = el.closest ? el.closest(TARGET_SELECTOR) : null;
-      return !!t;
-    } catch (e) {
-      return false;
-    }
+      if (!el || !el.closest) return false;
+      return !!el.closest("button, [role='button'], .emoji-item");
+    } catch (e) {}
+    return false;
   }
 
   function bind() {
-    ensureStyleOnce();
+    // CSS로 탭 하이라이트/콜아웃/선택 방지(버튼에만)
+    try {
+      var style = document.createElement("style");
+      style.id = "messengerPressGuardStyle";
+      style.textContent =
+        ".messenger-shell button, .messenger-shell [role='button'], .messenger-shell .emoji-item{" +
+        "-webkit-tap-highlight-color: transparent;" +
+        "-webkit-touch-callout: none;" +
+        "-webkit-user-select: none;" +
+        "user-select: none;" +
+        "}";
+      document.head.appendChild(style);
+    } catch (e) {}
 
-    // 컨텍스트 메뉴(롱프레스/우클릭) 차단: 버튼에서만
+    // 컨텍스트 메뉴 차단(버튼에만)
     document.addEventListener(
       "contextmenu",
       function (e) {
-        if (!isTarget(e.target)) return;
-        e.preventDefault();
-        e.stopPropagation();
+        try {
+          if (!e || !e.target) return;
+          if (!inMessenger(e.target)) return;
+          if (!isButtonish(e.target)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+        } catch (err) {}
       },
       true
     );
 
-    // 롱프레스 중 텍스트 선택/드래그 시도 방지(버튼에서만)
-    document.addEventListener(
-      "selectstart",
-      function (e) {
-        if (!isTarget(e.target)) return;
-        e.preventDefault();
-      },
-      true
-    );
-
-    document.addEventListener(
-      "dragstart",
-      function (e) {
-        if (!isTarget(e.target)) return;
-        e.preventDefault();
-      },
-      true
-    );
+    // 선택/드래그 시작 차단(버튼에만)
+    ["selectstart", "dragstart"].forEach(function (evt) {
+      document.addEventListener(
+        evt,
+        function (e) {
+          try {
+            if (!e || !e.target) return;
+            if (!inMessenger(e.target)) return;
+            if (!isButtonish(e.target)) return;
+            e.preventDefault();
+          } catch (err) {}
+        },
+        true
+      );
+    });
   }
 
   if (document.readyState === "loading") {
