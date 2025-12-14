@@ -1,15 +1,6 @@
-/* ============================================================
-   [messenger-close-bridge.js] (옵션) iframe 닫기 브릿지
-   ------------------------------------------------------------
-   - games/social-messenger.html 안의 X 버튼 클릭 시,
-     부모(index.html)의 오버레이 종료(exitGame)로 안전하게 연결합니다.
-   - 같은 출처 호출이 막히는 환경(file://, null origin 등)에서는 postMessage로 우회합니다.
-
-   [제거 시 함께 삭제/정리할 요소]
-   1) games/social-messenger.html 에서 <script src="../js/messenger-close-bridge.js"></script> 제거
-   2) games/social-messenger.html 의 닫기 버튼(#topCloseBtn) 동작이
-      부모 종료 로직에 의존하는 경우, 대체 동작(예: window.close) 확인
-   ============================================================ */
+// [옵션 모듈] 실시간 톡(메신저) 닫기 브릿지 - messenger-close-bridge.js
+// - iframe 내부 X 버튼으로 부모(메인) 오버레이를 안정적으로 닫습니다.
+// - 제거하려면 games/social-messenger.html 에서 본 스크립트 include를 제거하세요.
 
 (function(){
   function requestClose(){

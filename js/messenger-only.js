@@ -71,6 +71,24 @@
     if (!data) return;
     if (data.type === "WG_EXIT_GAME") {
       closeMessenger();
+      return;
+    }
+
+    // iframe에서 로그아웃을 요청한 경우
+    if (data.type === "WG_LOGOUT") {
+      try {
+        if (typeof window.logoutGhostUser === "function") {
+          window.logoutGhostUser();
+        } else {
+          try { localStorage.removeItem("ghostUser"); } catch (e) {}
+          window.currentUser = null;
+        }
+      } catch (e2) {}
+
+      // 로그인 패널을 즉시 띄우고, iframe을 새로 로드해 상태를 정리
+      try { if (typeof window.openLoginPanel === "function") window.openLoginPanel(); } catch (e3) {}
+      setCurrentUserFromStorage();
+      openMessenger(true);
     }
   }
 
@@ -87,6 +105,11 @@
       if (uid && uid !== lastUserId) {
         setCurrentUserFromStorage();
         // 로그인 직후에는 메신저를 새로 로드해서 입력/전송이 바로 되게
+        openMessenger(true);
+      } else if (!uid && lastUserId) {
+        // 로그아웃 감지: 로그인 패널을 띄우고 iframe도 리셋
+        setCurrentUserFromStorage();
+        try { if (typeof window.openLoginPanel === "function") window.openLoginPanel(); } catch (e2) {}
         openMessenger(true);
       }
     }, 400);

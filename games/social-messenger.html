@@ -43,7 +43,14 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
     }
+    .messenger-topbar-logo:active { opacity: 0.88; }
     .messenger-topbar-logo img {
       height: 68px; /* 로고만 더 크게 (상단바 높이는 유지) */
       max-height: 100%;
@@ -66,8 +73,7 @@
     .messenger-topbar-close:active {
       background: transparent;
     }
-    
-    /* ===== 상단바: 현재 대화방 버튼(왼쪽) ===== */
+/* ===== 상단바: 현재 대화방 버튼(왼쪽) ===== */
     .messenger-topbar-roombtn{
       position: absolute;
       left: 12px;
@@ -546,6 +552,22 @@
       color: #6b7280;
     }
 
+
+    /* 방별 미확인(새 글) 표시: 오른쪽 위 점 */
+    .room-item { position: relative; padding-right: 38px; }
+    .room-unread-badge{
+      position:absolute;
+      top: 12px;
+      right: 12px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #ef4444;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.95);
+      display: none;
+    }
+    .room-unread-badge.show{ display:block; }
+
     .chat-panel {
       flex: 1;
       display: flex;
@@ -666,11 +688,10 @@
   <div class="messenger-shell">
     <div class="messenger-topbar">
       <button class="messenger-topbar-roombtn" id="topRoomBtn" type="button" aria-expanded="false">전체 대화방</button>
-      <div class="messenger-topbar-logo">
+      <button class="messenger-topbar-logo" id="topLogoBtn" type="button" aria-label="전체화면 전환" title="전체화면 전환">
         <img src="../images/etcimage/mypai-logo.png" alt="마이파이 로고">
-      </div>
-      <button class="messenger-topbar-close" id="topCloseBtn" type="button">✕</button>
-    </div>
+      </button>
+          </div>
     <div id="roomBackdrop" class="room-backdrop" aria-hidden="true"></div>
     <div class="messenger-main">
       <div class="room-panel" id="roomPanel">
@@ -711,11 +732,14 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script src="../js/config.js"></script>
 <script src="../js/ui.js"></script>
+  <script src="../js/fullscreen-toggle.js"></script>
+  <script src="../js/send-voice-hold.js"></script>
   <script src="../js/messenger-close-bridge.js"></script>
   <script>window.CHAT_EMOJI_BASE_PATH = "../images/emoticon/";</script>
   <script src="../js/chat-emoji.js"></script>
   <script src="../js/chat-photo.js"></script>
   <script src="../js/chat-file.js"></script>
+  <script src="../js/room-unread-badge.js"></script>
   <script src="../js/chat-rooms.js"></script>
   <script src="../js/room-panel-toggle.js"></script>
   <script src="../js/room-guard.js"></script>

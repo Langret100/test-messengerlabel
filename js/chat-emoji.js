@@ -1,16 +1,13 @@
 // chat-emoji.js
 // ------------------------------------------------------
-// (메신저 전용) 채팅 이모티콘 렌더링/토큰 규칙 모듈
-// - images/emoticon/e1.png ~ e12.png 을 표시합니다.
-// - 전송/저장은 실제 이미지 대신 :e1: ~ :e12: 형태의 토큰만 사용합니다.
-// - (이 패키지에서는) 선택 패널 UI는 js/social-messenger.js 의 buildEmojiPanel()이 담당하고,
-//   본 파일은 주로 renderTextWithEmojis()로 "토큰 → 이미지" 렌더링을 제공합니다.
-//
+// 채팅창에서 사용할 이모티콘 선택 패널 모듈입니다.
+// - images/emotion/e1.png ~ e12.png 을 프론트에서 직접 읽어와 표시합니다.
+// - 서버/시트에는 실제 이미지 대신 :e1: ~ :e12: 형태의 코드만 전송됩니다.
 // - 제거 시 함께 정리할 것:
-//   1) games/social-messenger.html 의 #msgEmojiBtn / #msgEmojiPanel HTML 및 관련 <style>
-//      (.msg-emoji-panel, .emoji-grid, .emoji-item, .chat-emoji 등)
-//   2) games/social-messenger.html 의 <script src="../js/chat-emoji.js"></script>
-//   3) js/social-messenger.js 의 renderTextWithEmojis() 사용부(메시지 렌더링) 정리
+//   1) index.html 의 #emojiBtn / #emojiPanel 관련 HTML
+//   2) css/ghost.css 의 #emojiBtn, .emoji-wrapper, #emojiPanel, .emoji-grid 등 스타일
+//   3) core.js, social-chat-firebase.js 의 renderTextWithEmojis 호출 부분
+//   4) startup.js 의 initChatEmoji() 호출
 // ------------------------------------------------------
 (function () {
   var EMOJI_COUNT = 12;

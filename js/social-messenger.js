@@ -19,6 +19,13 @@
   window.SocialMessengerView = true;
 
   // Firebase 설정: social-chat-firebase.js 와 동일
+/* GITHUB_PAGES_SECRET_INJECT
+ * 공개 GitHub 저장소에서 Google API Key(AIza...) 노출 경고를 피하기 위해,
+ * apiKey 값은 커밋하지 않고 "__FIREBASE_API_KEY__" 플레이스홀더로 둡니다.
+ * GitHub Pages 배포 시 GitHub Actions(.github/workflows/pages.yml)가
+ * Secrets(FIREBASE_API_KEY)에 저장된 실제 키로 이 값을 치환해서 배포합니다.
+ */
+
   var FIREBASE_CONFIG = {
     apiKey: "__FIREBASE_API_KEY__",
     authDomain: "web-ghost-c447b.firebaseapp.com",
@@ -36,7 +43,61 @@
   var myNickname = null;
   var messages = [];
   var MAX_BUFFER = 30;
-  var __loadSeq = 0; // 방별 최근글 요청 순번(느린 응답 섞임 방지)
+  
+
+  // ---- fix28: robust ts parse + sheet<->relay dedupe helpers ----
+  function __smParseTs(v) {
+    try {
+      if (typeof v === "number" && isFinite(v)) return v;
+      if (typeof v === "string") {
+        var t = v.trim();
+        if (/^\d{10,13}$/.test(t)) return Number(t);
+        var p = Date.parse(t);
+        if (!isNaN(p)) return p;
+        var n = Number(t);
+        if (!isNaN(n)) return n;
+      }
+    } catch (e) {}
+    return 0;
+  }
+
+  function __smSigOf(user_id, text) {
+    return String(user_id || "") + "|" + String(text || "").trim();
+  }
+
+  function __smBuildRelayMidIndex(list) {
+    var idx = {};
+    try {
+      (list || []).forEach(function (m) {
+        if (!m || !m.mid) return;
+        var ts = __smParseTs(m.ts || 0);
+        var b = Math.floor(ts / 5000);
+        var sig = __smSigOf(m.user_id, m.text);
+        for (var d = -2; d <= 2; d++) {
+          var k = sig + "|" + String(b + d);
+          if (!idx[k]) idx[k] = String(m.mid);
+        }
+      });
+    } catch (e) {}
+    return idx;
+  }
+
+  function __smTryAttachMidFromRelayIndex(m, idx) {
+    try {
+      if (!m || m.mid) return;
+      var ts = __smParseTs(m.ts || 0);
+      var b = Math.floor(ts / 5000);
+      var sig = __smSigOf(m.user_id, m.text);
+      var deltas = [0, -1, 1, -2, 2, -3, 3];
+      for (var i = 0; i < deltas.length; i++) {
+        var k = sig + "|" + String(b + deltas[i]);
+        if (idx[k]) { m.mid = idx[k]; return; }
+      }
+    } catch (e) {}
+  }
+  // ---- end fix28 helpers ----
+
+var __loadSeq = 0; // 방별 최근글 요청 순번(느린 응답 섞임 방지)
 // 대화방(rooms)
   var currentRoomId = null;
   var currentRoomMeta = null;
@@ -80,6 +141,9 @@ var notifyBtn = makeItem("", function () { menu._fire && menu._fire("toggleNotif
 menu._notifyBtn = notifyBtn;
 menu.appendChild(notifyBtn);
 
+    // 로그아웃(요청: + 메뉴에 추가)
+    menu.appendChild(makeItem("🚪 로그아웃", function () { menu._fire && menu._fire("logout"); }));
+
     root.appendChild(menu);
     return menu;
   }
@@ -120,6 +184,7 @@ menu.appendChild(notifyBtn);
       if (type === "pickImage") return options.onPickImage && options.onPickImage();
       if (type === "pickFile") return options.onPickFile && options.onPickFile();
       if (type === "toggleNotify") return options.onToggleNotify && options.onToggleNotify();
+      if (type === "logout") return options.onLogout && options.onLogout();
     };
 
     btn.addEventListener("click", function (e) {
@@ -841,67 +906,107 @@ var NotifySetting = (function () {
   }
 
   async function loadRecentFromSheet(roomId) {
-    var wantedRoomId = String(roomId || currentRoomId || "").trim();
-    var seq = ++__loadSeq;
-    if (typeof window.postToSheet !== "function") return;
-    try {
-      var res = await window.postToSheet({
-        mode: "social_recent_room",
+  var wantedRoomId = String(roomId || currentRoomId || "").trim();
+  var seq = ++__loadSeq;
+  if (typeof window.postToSheet !== "function") return;
+  try {
+    var res = await window.postToSheet({
+      mode: "social_recent_room",
+      room_id: wantedRoomId,
+      nickname: getSafeNickname(),
+      limit: MAX_BUFFER
+    });
+    if (!res || !res.ok) return;
+
+    var text = await res.text();
+    var json = JSON.parse(text || "{}");
+    var rows = (json && json.messages) ? json.messages : [];
+
+    // 방이 바뀐 뒤/새 요청이 시작된 뒤 늦게 온 응답은 무시(대화 섞임 방지)
+    if (seq !== __loadSeq) return;
+    if (currentRoomId !== wantedRoomId) return;
+
+    // 시트 목록 파싱
+    var sheetList = [];
+    (rows || []).forEach(function (row) {
+      if (!row) return;
+      var rawMsg = (row.text || row.chatlog || row.message || row.msg || "").toString();
+      var mid = row.mid || row.message_id || row.id || "";
+      var m = {
+        key: mid ? ("m_" + mid) : ("s_" + (row.ts || row.timestamp || row.date || Date.now()) + "_" + Math.random().toString(16).slice(2)),
+        mid: mid || "",
+        user_id: row.user_id || "",
+        nickname: row.nickname || "익명",
+        text: rawMsg,
+        ts: row.ts || row.timestamp || row.date || Date.now(),
         room_id: wantedRoomId,
-        nickname: getSafeNickname(),
-        limit: MAX_BUFFER
-      });
-      if (!res || !res.ok) return;
-      var text = await res.text();
-      var json = JSON.parse(text || "{}");
-      if (!json || !json.messages || !json.messages.length) {
-        // 메시지가 0개인 경우에도 빈 화면이 되지 않도록 렌더
-        messages = [];
-        renderAll();
-        return;
-      }
+        _sheet: true
+      };
 
-      // 방이 바뀐 뒤/새 요청이 시작된 뒤 늦게 온 응답은 무시(대화 섞임 방지)
-      if (seq !== __loadSeq) return;
-      if (currentRoomId !== wantedRoomId) return;
-
-      messages = [];
-      json.messages.forEach(function (row) {
-        if (!row) return;
-        var rawMsg = (row.text || row.chatlog || row.message || row.msg || "").toString();
-        var m = {
-          user_id: row.user_id || "",
-          nickname: row.nickname || "익명",
-          text: rawMsg,
-          ts: row.ts || row.timestamp || row.date || Date.now()
-        };
-        // 시트에 [[IMG]]URL 형태로 저장된 경우 사진 메시지로 복원
+      // 토큰 기반 타입 복원([[IMG]] / [[FILE]])
+      try {
         if (rawMsg.indexOf("[[IMG]]") === 0) {
           m.type = "image";
           m.image_url = rawMsg.replace("[[IMG]]", "").trim();
           m.text = "";
-        }
-        // 시트에 [[FILE]]URL|filename 형태로 저장된 경우 파일 메시지로 복원
-        if (rawMsg.indexOf("[[FILE]]") === 0) {
+        } else if (rawMsg.indexOf("[[FILE]]") === 0) {
           var pf = parseFileToken(rawMsg);
           if (pf) {
             m.type = "file";
             m.file_url = pf.url;
             m.file_name = pf.name;
             m.text = "";
+          } else {
+            m.type = "text";
           }
+        } else {
+          m.type = "text";
         }
-        messages.push(m);
-      });
-
-      if (messages.length > MAX_BUFFER) {
-        messages = messages.slice(messages.length - MAX_BUFFER);
+      } catch (e0) {
+        m.type = "text";
       }
-      renderAll();
-    } catch (e) {
-      console.warn("[messenger] 최근 메시지 불러오기 실패:", e);
+
+      sheetList.push(m);
+    });
+
+    // merge: 기존(릴레이 포함)을 덮어쓰지 않고 합치기 (mid 우선)
+    var __relayIdx = __smBuildRelayMidIndex(messages);
+    sheetList.forEach(function(m){ __smTryAttachMidFromRelayIndex(m, __relayIdx); });
+
+    var map = {};
+    function keyOf(m) {
+      var mid2 = (m && m.mid) ? String(m.mid) : "";
+      if (mid2) return "m:" + mid2;
+      return "k:" + String(m.user_id || "") + "|" + String(m.nickname || "") + "|" + String(m.text || "") + "|" + String(m.ts || 0);
     }
+
+    (messages || []).forEach(function (m) {
+      if (!m) return;
+      map[keyOf(m)] = m;
+    });
+
+    sheetList.forEach(function (m) {
+      if (!m) return;
+      map[keyOf(m)] = m; // 시트가 정답 우선
+      // 디듀프 힌트
+      try { if (m.mid) __rememberRelay(m.mid); } catch (eD) {}
+    });
+
+    var merged = Object.keys(map).map(function (k) { return map[k]; });
+    merged.sort(function (a, b) { return Number(a.ts || 0) - Number(b.ts || 0); });
+
+    if (merged.length > MAX_BUFFER) {
+      merged = merged.slice(merged.length - MAX_BUFFER);
+    }
+
+    messages = merged;
+    renderAll();
+  } catch (e) {
+    console.warn("[messenger] 최근 메시지 불러오기 실패:", e);
   }
+}
+
+
 
   // signals 수신에 따라 현재 방의 최근글(30개)만 '짧게' 갱신 (속도/혼선 방지)
   var __roomRefreshTimer = null;
@@ -919,6 +1024,122 @@ function isVisitedRoomForNotify(roomId) {
     return false;
   }
 }
+
+// ------------------------------------------------------------
+// (B안) Firebase를 "저장소"가 아니라 "중계"로만 사용해 실시간 속도 확보
+// - SignalBus(/signals/<room>/q)의 onMessage를 받아 현재 방 UI에 즉시 반영합니다.
+// - 중복/에코 방지용 mid(메시지 ID) 기반 디듀프를 포함합니다.
+// ------------------------------------------------------------
+var __relaySeen = {};
+var __relaySeenOrder = [];
+var __RELAY_SEEN_MAX = 240;
+
+function __rememberRelay(mid) {
+  try {
+    if (!mid) return;
+    mid = String(mid);
+    if (__relaySeen[mid]) return;
+    __relaySeen[mid] = 1;
+    __relaySeenOrder.push(mid);
+    if (__relaySeenOrder.length > __RELAY_SEEN_MAX) {
+      var old = __relaySeenOrder.splice(0, __relaySeenOrder.length - __RELAY_SEEN_MAX);
+      old.forEach(function (k) { delete __relaySeen[k]; });
+    }
+  } catch (e) {}
+}
+
+function __hasRelay(mid) {
+  try { return !!(__relaySeen && mid && __relaySeen[String(mid)]); } catch (e) { return false; }
+}
+
+function __removeByMid(mid) {
+  try {
+    if (!mid) return false;
+    mid = String(mid);
+    var removed = false;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var it = messages[i];
+      if (!it) continue;
+      if (String(it.mid || it.key || "") === mid) {
+        messages.splice(i, 1);
+        removed = true;
+      }
+    }
+    if (removed) renderAll();
+    return removed;
+  } catch (e) { return false; }
+}
+
+function __toMessageFromRelay(msgInfo) {
+  var txt = (msgInfo && msgInfo.text != null) ? String(msgInfo.text) : "";
+  var m = {
+    key: (msgInfo.mid || ("relay_" + (msgInfo.ts || Date.now()))),
+    mid: msgInfo.mid || "",
+    user_id: msgInfo.user_id || "",
+    nickname: msgInfo.nickname || "익명",
+    text: txt,
+    ts: msgInfo.ts || Date.now(),
+    room_id: msgInfo.roomId || currentRoomId || "",
+    _relay: true
+  };
+
+  // 토큰 기반 타입 복원([[IMG]] / [[FILE]])
+  try {
+    if (txt.indexOf("[[IMG]]") === 0) {
+      m.type = "image";
+      m.image_url = txt.replace("[[IMG]]", "").trim();
+      m.text = "";
+    } else if (txt.indexOf("[[FILE]]") === 0) {
+      var pf = (typeof parseFileToken === "function") ? parseFileToken(txt) : null;
+      if (pf) {
+        m.type = "file";
+        m.file_url = pf.url;
+        m.file_name = pf.name;
+        m.text = "";
+      } else {
+        m.type = "text";
+      }
+    } else {
+      m.type = "text";
+    }
+  } catch (e2) {
+    m.type = "text";
+  }
+
+  return m;
+}
+
+function __applyRelayMessage(msgInfo) {
+  try {
+    if (!msgInfo || !msgInfo.roomId) return;
+    if (!currentRoomId) return;
+    if (String(msgInfo.roomId) !== String(currentRoomId)) return;
+
+    // retract(전송 실패/취소) 처리
+    if (String(msgInfo.kind || "") === "retract") {
+      __removeByMid(msgInfo.mid || "");
+      return;
+    }
+
+    var mid = msgInfo.mid || "";
+    if (mid && __hasRelay(mid)) return;
+    if (mid) __rememberRelay(mid);
+
+    var m = __toMessageFromRelay(msgInfo);
+
+    // 현재 방에서 보고 있을 때는 lastSeenTs 갱신(알림 오탐 방지)
+    try {
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId || "", m.ts || Date.now());
+      }
+    } catch (eSeen) {}
+
+    messages.push(m);
+    if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
+    renderAll();
+  } catch (e) {}
+}
+
 function scheduleRoomRefresh(roomId) {
     try {
       if (!roomId) return;
@@ -1116,9 +1337,11 @@ function scheduleRoomRefresh(roomId) {
     var now = Date.now();
 
     // 즉시 화면에 반영(낙관적 렌더)
-    var __localKey = "local_" + now + "_" + Math.random().toString(16).slice(2);
+    var __mid = "m_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_" + __mid;
     var __localMsg = {
       key: __localKey,
+      mid: __mid,
       user_id: myId || "",
       nickname: getSafeNickname(),
       text: clean,
@@ -1140,6 +1363,22 @@ function scheduleRoomRefresh(roomId) {
       }
     } catch (e0) {}
 
+    // (B안) Firebase signals 큐로 즉시 중계(시트 저장과는 별개)
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: clean,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
     // 1) 시트에 기록 (진짜 저장소)
     // 2) 성공 시 signals 트리거(실시간 갱신/알림용, Firebase에는 메시지 저장 안함)
     try {
@@ -1148,6 +1387,7 @@ function scheduleRoomRefresh(roomId) {
       window.postToSheet({
         mode: "social_chat_room",
         room_id: currentRoomId || "",
+        mid: __mid,
         user_id: myId || "",
         nickname: getSafeNickname(),
         message: clean,
@@ -1158,18 +1398,18 @@ function scheduleRoomRefresh(roomId) {
 
         // 성공 토스트(보냈어요!)는 표시하지 않음
 
-        // signals
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", myId || "", now);
-          }
-        } catch (e2) {}
-
-        // 내 화면도 빠르게 시트 기준으로 재정렬(필요 시)
+        // (선택) 시트 기반으로 1회 정렬/동기화(필요 시)
         scheduleRoomRefresh(currentRoomId || "");
       }).catch(function (err) {
         console.warn("[messenger] 시트 전송 실패:", err);
         showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
 
         // 낙관적 렌더 롤백
         try {
@@ -1400,7 +1640,35 @@ onPickImage: async function () {
             }
           },
           getNotifyLabel: function () { return NotifySetting.getMenuLabel(); },
-          onToggleNotify: function () { NotifySetting.toggle(showStatus); }
+          onToggleNotify: function () { NotifySetting.toggle(showStatus); },
+          onLogout: function () {
+            // iframe 내부 → 부모(index.html)로 로그아웃 요청
+            try {
+              // 1) 같은 출처라면 부모 전역 함수 직접 호출
+              if (window.parent && typeof window.parent.logoutGhostUser === "function") {
+                window.parent.logoutGhostUser();
+              }
+              if (window.parent && typeof window.parent.openLoginPanel === "function") {
+                // 로그아웃 후 바로 로그인창 띄우기
+                window.parent.openLoginPanel();
+              }
+            } catch (e) {}
+
+            // 2) postMessage fallback (file:// 등 환경)
+            try {
+              if (window.parent && window.parent.postMessage) {
+                window.parent.postMessage({ type: "WG_LOGOUT" }, "*");
+              }
+            } catch (e2) {}
+
+            // 3) 현재 iframe 상태도 즉시 잠그기
+            try {
+              localStorage.removeItem("ghostUser");
+            } catch (e3) {}
+            myId = null;
+            myNickname = null;
+            showStatus("로그아웃 되었어요.");
+          }
         });
     }
   }
@@ -1418,9 +1686,11 @@ onPickImage: async function () {
     var token = "[[IMG]]" + imageUrl;
 
     // 낙관적 렌더
-    var __localKey = "local_img_" + now + "_" + Math.random().toString(16).slice(2);
+    var __mid = "mimg_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_img_" + __mid;
     var __localMsg = {
       key: __localKey,
+      mid: __mid,
       user_id: myId || "",
       nickname: getSafeNickname(),
       type: "image",
@@ -1443,12 +1713,29 @@ onPickImage: async function () {
       }
     } catch (e0) {}
 
+    // (B안) Firebase signals 큐로 즉시 중계
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: token,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
     try {
       if (typeof window.postToSheet !== "function") throw new Error("postToSheet missing");
 
       window.postToSheet({
         mode: "social_chat_room",
         room_id: currentRoomId || "",
+        mid: __mid,
         user_id: myId || "",
         nickname: getSafeNickname(),
         message: token,
@@ -1459,16 +1746,17 @@ onPickImage: async function () {
 
         // 성공 토스트(사진을 보냈어요!)는 표시하지 않음
 
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", myId || "", now);
-          }
-        } catch (e2) {}
-
         scheduleRoomRefresh(currentRoomId || "");
       }).catch(function (err) {
         console.warn("[messenger] 이미지 시트 전송 실패:", err);
         showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
 
         try {
           for (var i = messages.length - 1; i >= 0; i--) {
@@ -1499,9 +1787,11 @@ onPickImage: async function () {
     var token = "[[FILE]]" + fileUrl + "|" + safeName;
 
     // 낙관적 렌더
-    var __localKey = "local_file_" + now + "_" + Math.random().toString(16).slice(2);
+    var __mid = "mfile_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_file_" + __mid;
     var __localMsg = {
       key: __localKey,
+      mid: __mid,
       user_id: myId || "",
       nickname: getSafeNickname(),
       type: "file",
@@ -1527,12 +1817,29 @@ onPickImage: async function () {
       }
     } catch (e0) {}
 
+    // (B안) Firebase signals 큐로 즉시 중계
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: token,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
     try {
       if (typeof window.postToSheet !== "function") throw new Error("postToSheet missing");
 
       window.postToSheet({
         mode: "social_chat_room",
         room_id: currentRoomId || "",
+        mid: __mid,
         user_id: myId || "",
         nickname: getSafeNickname(),
         message: token,
@@ -1543,16 +1850,17 @@ onPickImage: async function () {
 
         // 성공 토스트(파일을 보냈어요!)는 표시하지 않음
 
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", myId || "", now);
-          }
-        } catch (e2) {}
-
         scheduleRoomRefresh(currentRoomId || "");
       }).catch(function (err) {
         console.warn("[messenger] 파일 시트 전송 실패:", err);
         showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
 
         try {
           for (var i = messages.length - 1; i >= 0; i--) {
@@ -1655,13 +1963,10 @@ onPickImage: async function () {
                 db: db0,
                 getMyId: function () { return myId || ""; },
                 onSignal: function (info) {
-                  // signals 수신 시: 현재 열려있는 방이면 즉시 최근글(30개)만 갱신
-                  try {
-                    if (!info || !info.roomId) return;
-                    if (currentRoomId && info.roomId === currentRoomId) {
-                      scheduleRoomRefresh(currentRoomId);
-                    }
-                  } catch (e) {}
+                  // 큐 기반 중계(onMessage)가 기본. onSignal은 fallback 용도로만 남깁니다.
+                },
+                onMessage: function (msgInfo) {
+                  try { __applyRelayMessage(msgInfo); } catch (e) {}
                 },
                 onNotify: function (info) {
                   // 현재 열려있는 방이면 알림 생략

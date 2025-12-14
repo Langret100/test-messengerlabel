@@ -25,6 +25,7 @@
   var LS_ACTIVE_ID = "ghostActiveRoomId";
   var LS_ACTIVE_NAME = "ghostActiveRoomName";
   var LS_ROOMS_CACHE = "ghostRoomsCache_v1";
+  var LS_VISITED = "ghostRoomVisited_v1"; // 내가 실제로 들어간(확인한) 방만 알림/표시
 
   var LONGPRESS_MS = 650;
 
@@ -38,6 +39,75 @@
       }
     } catch (e) {}
     return "익명";
+  }
+
+  function loadVisitedMap() {
+    try {
+      var raw = localStorage.getItem(LS_VISITED);
+      if (raw) {
+        var obj = JSON.parse(raw || "{}");
+        return (obj && typeof obj === "object") ? obj : {};
+      }
+    } catch (e) {}
+    return {};
+  }
+
+  function saveVisitedMap(map) {
+    try { localStorage.setItem(LS_VISITED, JSON.stringify(map || {})); } catch (e) {}
+
+    // 같은 탭에서도 즉시 반영
+    try {
+      window.dispatchEvent(new CustomEvent("ghost:visited-rooms-updated", { detail: { visited: map || {} } }));
+    } catch (e2) {}
+
+    // signals 구독 갱신(방 목록 패널 key)
+    try {
+      if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
+        window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []), "rooms-panel");
+      }
+    } catch (e3) {}
+  }
+
+  function markVisitedRoom(roomId) {
+    try {
+      roomId = roomId ? String(roomId).trim() : "";
+      if (!roomId) return;
+      var map = loadVisitedMap();
+      map[roomId] = Date.now();
+      map["global"] = map["global"] || Date.now();
+      saveVisitedMap(map);
+    } catch (e) {}
+  }
+
+  function removeVisitedRoom(roomId) {
+    try {
+      roomId = roomId ? String(roomId).trim() : "";
+      if (!roomId) return;
+      var map = loadVisitedMap();
+      delete map[roomId];
+      map["global"] = map["global"] || Date.now();
+      saveVisitedMap(map);
+    } catch (e) {}
+  }
+
+  function pruneVisitedAgainstRooms(roomList) {
+    try {
+      var list = Array.isArray(roomList) ? roomList : [];
+      var map = loadVisitedMap();
+      map = (map && typeof map === "object") ? map : {};
+      var allowed = { "global": true };
+      for (var i = 0; i < list.length; i++) {
+        var r = list[i];
+        if (!r || !r.room_id) continue;
+        allowed[String(r.room_id)] = true;
+      }
+      var changed = false;
+      Object.keys(map).forEach(function (rid) {
+        if (!rid || rid === "global") return;
+        if (!allowed[rid]) { delete map[rid]; changed = true; }
+      });
+      if (changed) saveVisitedMap(map);
+    } catch (e) {}
   }
 
   function api(payload) {
@@ -93,9 +163,12 @@
   // - 글로벌은 항상 포함
   // - 초대(멤버)방 기능을 제거했으므로, 방 목록(캐시 포함)에 있는 방들은
   //   메시지 내용을 불러오지 않고도 'signals'만 구독해서 알림만 받을 수 있음
+  
   function getMySignalRoomIds(list) {
     var arr = Array.isArray(list) ? list : [];
     var ids = [];
+    var visited = loadVisitedMap();
+    visited = (visited && typeof visited === "object") ? visited : {};
 
     function add(id) {
       if (!id) return;
@@ -104,14 +177,14 @@
       ids.push(id);
     }
 
-    // global은 항상 포함
     add("global");
 
-    // 목록에 있는 방들(최대 30개)까지 signals 구독
-    for (var i = 0; i < arr.length && ids.length < 30; i++) {
-      var r = arr[i];
-      if (!r) continue;
-      add(r.room_id);
+    var vIds = Object.keys(visited || {});
+    for (var i = 0; i < vIds.length && ids.length < 30; i++) {
+      var rid = String(vIds[i] || "");
+      if (!rid || rid === "global") continue;
+      var exists = arr.some(function (r) { return r && String(r.room_id || "") === rid; });
+      if (exists) add(rid);
     }
     return ids.slice(0, 30);
   }
@@ -149,6 +222,13 @@ var isMember2 = isPublic2 || (participants2.indexOf(me2) >= 0);
       else meta.textContent = "공개";
 item.appendChild(meta);
 
+      // (미확인 표시) 방에 새 글이 있으면 오른쪽 위 점 표시
+      try {
+        if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.applyToItem === "function") {
+          window.RoomUnreadBadge.applyToItem(item, r.room_id);
+        }
+      } catch (eBadge) {}
+
       // 클릭 = 방 전환
       item.addEventListener("click", function () {
   var me = safeNick();
@@ -175,6 +255,7 @@ item.appendChild(meta);
         }
         // 성공하면 즉시 활성화(중요: loadRooms 대기 금지)
         setActiveRoom(targetId);
+        markVisitedRoom(targetId);
         // 명단/라벨 반영은 백그라운드로 갱신
         loadRooms();
       })
@@ -184,12 +265,14 @@ item.appendChild(meta);
 
   // 2) 공개방 또는 이미 멤버인 방 → 즉시 활성화(중요: 입장 API 대기 금지)
   setActiveRoom(targetId);
+  markVisitedRoom(targetId);
 
   // 입장 기록(멤버 등록/명단 반영)은 백그라운드로 처리
   api({ mode: "social_room_enter", room_id: targetId, nickname: me })
     .then(function (json) {
       if (!json || !json.ok) {
         // 예외적으로 실패하면 이전 방으로 복귀
+        removeVisitedRoom(targetId);
         setActiveRoom(prevId);
         alert((json && json.error) || "입장에 실패했어요.");
         return;
@@ -197,6 +280,7 @@ item.appendChild(meta);
       loadRooms();
     })
     .catch(function () {
+      removeVisitedRoom(targetId);
       setActiveRoom(prevId);
       alert("입장에 실패했어요.");
     });
@@ -298,6 +382,13 @@ item.appendChild(meta);
       return;
     }
     activeRoomId = roomId;
+
+    // 해당 방을 "확인"한 것으로 처리 → 미확인 표시 제거
+    try {
+      if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") {
+        window.RoomUnreadBadge.clear(activeRoomId);
+      }
+    } catch (eBadge2) {}
     try { localStorage.setItem(LS_ACTIVE_ID, String(roomId)); } catch (e) {}
     // 방 이름도 저장(재접속 시 상단 표시용)
     try {
@@ -339,6 +430,10 @@ item.appendChild(meta);
         alert((json && json.error) || "나가기에 실패했어요.");
         return;
       }
+      // 방문(입장) 기록 제거 + 미확인 점 제거
+      removeVisitedRoom(room.room_id);
+      try { if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") window.RoomUnreadBadge.clear(room.room_id); } catch (eBadge) {}
+
       // 나간 뒤에는 현재 방이면 비우기
       loadRooms().then(function () {
         setActiveRoom(null);
@@ -402,6 +497,9 @@ item.appendChild(meta);
       if (!json || !json.ok) throw new Error("rooms api fail");
       rooms = normalizeRooms(json.rooms || []);
 
+      // 방문 기록은 현재 목록 기준으로 정리(삭제된 방 구독 방지)
+      pruneVisitedAgainstRooms(rooms);
+
       // 방 목록 캐시(localStorage): 패널이 닫혀 있어도 signals 구독/표시용으로 사용
       try {
         var slim = (rooms || []).map(function (r) {
@@ -424,7 +522,7 @@ item.appendChild(meta);
       // signals 구독 대상(내 소속 방들) 갱신
       try {
         if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
-          window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []));
+          window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []), "rooms-panel");
         }
       } catch (e) {}
 
@@ -475,6 +573,13 @@ item.appendChild(meta);
   }
 
   function init() {
+    // global은 기본 방문 처리
+    try {
+      var vm = loadVisitedMap();
+      if (!vm || typeof vm !== "object") vm = {};
+      if (!vm["global"]) { vm["global"] = Date.now(); saveVisitedMap(vm); }
+    } catch (e) {}
+
     roomListEl = document.getElementById("roomList");
     addBtnEl = document.getElementById("roomAddBtn");
     titleEl = document.getElementById("roomTitle");

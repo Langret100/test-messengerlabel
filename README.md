@@ -2,6 +2,8 @@
 
 이 압축파일은 **유저 간 실시간 대화(메신저)** 기능만 남긴 최소 구성입니다.
 
+※ 참고: 이 zip에는 Apps Script 예시 파일(apps_script 폴더)을 포함하지 않았습니다. 필요하면 따로 추가해 드릴 수 있습니다.
+
 ## 사용 흐름
 1) `index.html` 실행
 2) 로그인/회원가입
@@ -26,7 +28,7 @@
 - `games/social-messenger.html` : 메신저 UI(iframe)
 - `js/social-messenger.js` : **메시지는 시트에만 저장** + Firebase는 `signals` 트리거(알림/갱신)만 사용
 - `js/chat-photo.js` : 사진 선택/촬영 → 리사이즈 → (선택) Apps Script 업로드
-- `apps_script/*` : (선택) Apps Script 예시
+- `apps_script/*(별도)` : (이 zip에는 포함되지 않음 — 필요하면 별도로 추가)
 - `images/*` : 로고/파비콘/이모티콘
 
 ## 개발/수정 규칙(요청사항 반영)
@@ -39,6 +41,21 @@
 
 
 ## 변경 로그
+### v9.3.16
+- (UI) 메신저 상단의 X(닫기) 버튼 제거
+- (UI) 상단 오른쪽에 **반투명 전체화면 전환 버튼** 추가(가능한 환경에서 Fullscreen API 토글)
+- (입력) **보내기 버튼을 꾹 누르면 음성인식**(Web Speech API) → 텍스트가 입력창에 자동 입력
+- 신규 모듈: `js/fullscreen-toggle.js`, `js/send-voice-hold.js` 추가 + `games/social-messenger.html`에 include
+
+### v9.3.15
+- (요구사항) + 첨부 메뉴에 **로그아웃** 버튼 추가
+
+### v9.3.14 (fix28 메신저 업그레이드 적용)
+- (성능/속도) 최근글 로딩/갱신 로직 보강(느린 응답 섞임 방지, 전송/갱신 체감 개선)
+- (중복/정합) 시간값(ts) 파싱을 더 견고하게 처리 + 중복 중계(relay) 메시지 식별 보강
+- (알림 표시) 방 목록에 **미확인 새 글 점 표시** 추가(방에 들어가 확인하면 자동 해제)
+- (연동) 위 기능을 위해 `js/room-unread-badge.js` 신규 추가 + `games/social-messenger.html`에 CSS/스크립트 include 추가
+
 ### v9.3.12
 - (중요) Firebase `socialChatRooms`에 메시지 본문을 **저장/구독하지 않음**(기록은 Google Sheet만)
 - (실시간) Firebase는 `signals`만 사용: 수신 즉시 삭제 + 송신 측 60초 후 자동 삭제(잔존 최소화)
@@ -89,7 +106,7 @@
 - (요구사항) 파일 첨부 업로드(클라이언트 5MB 제한) 추가
 - (요구사항) 이미지 업로드는 480x480 리사이즈(기존 유지) + 사진촬영/이미지첨부 분리
 - (요구사항) 내 글(내 메시지) 바로 다음에 다른 사람이 글을 달면 알림음(띠리링) 재생
-- js/chat-file.js / apps_script/ADDON_social_upload_file.gs 추가
+- js/chat-file.js / apps_script/ADDON_social_upload_file.gs(별도) 추가
 - js/social-messenger.js: 파일 메시지 렌더링 + [[FILE]]URL|filename 기록/복원 + 알림음 트리거 + + 메뉴 연동
 
 ### v8.2.1
@@ -115,7 +132,7 @@
 ### v9.0.0
 - (요구사항) **대화방 여러 개** 지원(대화방 목록/방 전환/방 생성/꾹 눌러 나가기)
 - 기존 대화는 **전체 대화방(global)** 으로 유지(나가기 불가, 목록 1번 고정)
-- 대화 기록은 스프레드시트 탭 **'대화방'** 1개에서 **가로(컬럼)로 방을 생성**하고, 각 방 메시지는 그 아래로 누적(샘플 Apps Script: `apps_script/CHAT_ROOMS_MESSENGER.gs`)
+- 대화 기록은 스프레드시트 탭 **'대화방'** 1개에서 **가로(컬럼)로 방을 생성**하고, 각 방 메시지는 그 아래로 누적(샘플 Apps Script: `apps_script/CHAT_ROOMS_MESSENGER.gs(별도)`)
 - 신규 모듈: `js/chat-rooms.js` 추가 + `games/social-messenger.html`, `js/social-messenger.js` 연동
 
 ### v9.0.1
