@@ -1,556 +1,2245 @@
 /* ============================================================
-   [social-messenger.js]  메인 채팅 로직 (Firebase 기반 재작성)
+   [social-messenger.js] 소통 채팅 메신저형 전체 화면 뷰
    ------------------------------------------------------------
-   - 메시지 저장/로딩: Firebase Realtime DB (빠른 실시간)
-   - 백업: 구글 시트 (기존 postToSheet 유지, 쓰기만)
-   - 30일 이전 Firebase 메시지 자동 삭제 (시트는 유지)
-   - 카톡 스타일: 프로필 이미지 + 보낸이 이름 + 시간 표시
-   - 프로필 이미지: Google Drive 저장, 로컬 캐시로 즉시 표시
+   - games/social-messenger.html 안에서만 사용
+   - Firebase Realtime Database "socialChatRooms/{roomId}" 경로와 Apps Script를 활용해
+     기존 소통 채팅(마이파-톡)과 같은 방/기록을 사용합니다.
+   - 기본 채팅창 모드와 관계없이, 이 화면에서는 항상 "소통 채팅"처럼 동작합니다.
+   - 이모티콘(:e1: ~ :e12:)은 chat-emoji.js 의 renderTextWithEmojis 로 렌더링합니다.
+
+   [제거 시 함께 삭제할 요소]
+   1) games/social-messenger.html
+   2) js/social-messenger.js
+   3) js/game-manager.js 의 window.launchMessenger 정의
+   4) js/actions.js 의 data-action="social-messenger" 분기
+   5) index.html 플러스 메뉴의 "📱 실시간 톡 보기" 버튼
    ============================================================ */
-
 (function () {
+  if (window.SocialMessengerView) return;
+  window.SocialMessengerView = true;
 
-  /* ===== Firebase 초기화 (config.js 에서 window.FIREBASE_CONFIG 를 세팅하거나
-     index.html 에서 이미 initializeApp 했으면 그걸 사용) ===== */
-  var db = null;
-  function ensureDb() {
-    if (db) return db;
-    try { db = firebase.database(); } catch (e) {}
-    return db;
+  // Firebase 설정: social-chat-firebase.js 와 동일
+/* GITHUB_PAGES_SECRET_INJECT
+ * 공개 GitHub 저장소에서 Google API Key(AIza...) 노출 경고를 피하기 위해,
+ * apiKey 값은 커밋하지 않고 "__FIREBASE_API_KEY__" 플레이스홀더로 둡니다.
+ * GitHub Pages 배포 시 GitHub Actions(.github/workflows/pages.yml)가
+ * Secrets(FIREBASE_API_KEY)에 저장된 실제 키로 이 값을 치환해서 배포합니다.
+ */
+
+  var FIREBASE_CONFIG = {
+    apiKey: "__FIREBASE_API_KEY__",
+    authDomain: "web-ghost-c447b.firebaseapp.com",
+    databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
+    projectId: "web-ghost-c447b",
+    storageBucket: "web-ghost-c447b.firebasestorage.app",
+    messagingSenderId: "198377381878",
+    appId: "1:198377381878:web:83b56b1b4d63138d27b1d7"
+  };
+
+  var app, db, ref;
+  var bodyEl, statusEl, msgInput, sendBtn, emojiBtn, emojiPanel, cameraBtn, closeBtn;
+  var zoomOverlay, zoomImg;
+  var myId = null;
+  var myNickname = null;
+  var messages = [];
+  var MAX_BUFFER = 30;
+  
+
+  // ---- fix28: robust ts parse + sheet<->relay dedupe helpers ----
+  function __smParseTs(v) {
+    try {
+      if (typeof v === "number" && isFinite(v)) return v;
+      if (typeof v === "string") {
+        var t = v.trim();
+        if (/^\d{10,13}$/.test(t)) return Number(t);
+        var p = Date.parse(t);
+        if (!isNaN(p)) return p;
+        var n = Number(t);
+        if (!isNaN(n)) return n;
+      }
+    } catch (e) {}
+    return 0;
   }
 
-  /* ===== 현재 유저 ===== */
-  function myNickname() {
+  function __smSigOf(user_id, text) {
+    return String(user_id || "") + "|" + String(text || "").trim();
+  }
+
+  function __smBuildRelayMidIndex(list) {
+    var idx = {};
     try {
-      if (window.currentUser && window.currentUser.nickname) return String(window.currentUser.nickname);
-      var raw = localStorage.getItem("ghostUser");
-      if (raw) { var u = JSON.parse(raw); if (u && u.nickname) return String(u.nickname); }
+      (list || []).forEach(function (m) {
+        if (!m || !m.mid) return;
+        var ts = __smParseTs(m.ts || 0);
+        var b = Math.floor(ts / 5000);
+        var sig = __smSigOf(m.user_id, m.text);
+        for (var d = -2; d <= 2; d++) {
+          var k = sig + "|" + String(b + d);
+          if (!idx[k]) idx[k] = String(m.mid);
+        }
+      });
     } catch (e) {}
+    return idx;
+  }
+
+  function __smTryAttachMidFromRelayIndex(m, idx) {
+    try {
+      if (!m || m.mid) return;
+      var ts = __smParseTs(m.ts || 0);
+      var b = Math.floor(ts / 5000);
+      var sig = __smSigOf(m.user_id, m.text);
+      var deltas = [0, -1, 1, -2, 2, -3, 3];
+      for (var i = 0; i < deltas.length; i++) {
+        var k = sig + "|" + String(b + deltas[i]);
+        if (idx[k]) { m.mid = idx[k]; return; }
+      }
+    } catch (e) {}
+  }
+  // ---- end fix28 helpers ----
+
+var __loadSeq = 0; // 방별 최근글 요청 순번(느린 응답 섞임 방지)
+// 대화방(rooms)
+  var currentRoomId = null;
+  var currentRoomMeta = null;
+  
+  var listenStartedAt = Date.now();
+
+
+
+// ------------------------------------------------------------
+// (통합) + 버튼 첨부 메뉴 / 알림음 모듈
+// - 기존 js/modules/* 의 attach-menu.js, notify-sound.js 를
+//   본 파일로 통합했습니다(동작/디자인 동일).
+// ------------------------------------------------------------
+
+var AttachMenu = (function () {
+  function buildMenu(root) {
+    var menu = document.createElement("div");
+    menu.className = "msg-attach-menu";
+    menu.setAttribute("aria-hidden", "true");
+
+    function makeItem(label, action) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "msg-attach-item";
+      btn.textContent = label;
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        try { action && action(); } catch (err) {}
+      });
+      return btn;
+    }
+
+    menu.appendChild(makeItem("📷 사진촬영", function () { menu._fire && menu._fire("takePhoto"); }));
+menu.appendChild(makeItem("🔎 QR 링크 스캔", function () { menu._fire && menu._fire("scanQr"); }));
+menu.appendChild(makeItem("🖼️ 이미지 첨부", function () { menu._fire && menu._fire("pickImage"); }));
+menu.appendChild(makeItem("📎 파일 첨부", function () { menu._fire && menu._fire("pickFile"); }));
+
+// 알림 설정(켜짐/꺼짐 표시)
+var notifyBtn = makeItem("", function () { menu._fire && menu._fire("toggleNotify"); });
+menu._notifyBtn = notifyBtn;
+menu.appendChild(notifyBtn);
+
+    // 로그아웃(요청: + 메뉴에 추가)
+    menu.appendChild(makeItem("🚪 로그아웃", function () { menu._fire && menu._fire("logout"); }));
+
+    root.appendChild(menu);
+    return menu;
+  }
+
+  function init(options) {
+    // options: { buttonEl, containerEl, onTakePhoto, onScanQr, onPickImage, onPickFile }
+    options = options || {};
+    var btn = options.buttonEl;
+    var container = options.containerEl || (btn ? btn.parentElement : null);
+    if (!btn || !container) return null;
+
+    // 중복 바인딩 방지(동작 영향 없이 안전장치)
+    if (btn.__attachMenuBound) return btn.__attachMenuApi || null;
+
+    var existing = container.querySelector(":scope > .msg-attach-menu");
+    var menu = existing || buildMenu(container);
+
+    function closeMenu() {
+      menu.classList.remove("open");
+      menu.setAttribute("aria-hidden", "true");
+    }
+    function openMenu() {
+      if (menu._notifyBtn && typeof options.getNotifyLabel === "function") {
+        menu._notifyBtn.textContent = options.getNotifyLabel();
+      }
+      menu.classList.add("open");
+      menu.setAttribute("aria-hidden", "false");
+    }
+    function toggleMenu() {
+      if (menu.classList.contains("open")) closeMenu();
+      else openMenu();
+    }
+
+    menu._fire = function (type) {
+      closeMenu();
+      if (type === "takePhoto") return options.onTakePhoto && options.onTakePhoto();
+      if (type === "scanQr") return options.onScanQr && options.onScanQr();
+      if (type === "pickImage") return options.onPickImage && options.onPickImage();
+      if (type === "pickFile") return options.onPickFile && options.onPickFile();
+      if (type === "toggleNotify") return options.onToggleNotify && options.onToggleNotify();
+      if (type === "logout") return options.onLogout && options.onLogout();
+    };
+
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleMenu();
+    });
+
+    document.addEventListener("click", function (e) {
+      if (!menu.classList.contains("open")) return;
+      if (e.target === btn || btn.contains(e.target)) return;
+      if (menu.contains(e.target)) return;
+      closeMenu();
+    });
+
+    window.addEventListener("resize", closeMenu);
+    container.addEventListener("scroll", closeMenu, { passive: true });
+
+    var api = { open: openMenu, close: closeMenu, element: menu };
+    btn.__attachMenuBound = true;
+    btn.__attachMenuApi = api;
+    return api;
+  }
+
+  return { init: init };
+})();
+
+var NotifySound = (function () {
+  var ctx = null;
+  var masterGain = null;
+  var keepAliveOsc = null;
+  var enabled = false;
+  var bound = false;
+
+  function ensureContext() {
+    if (ctx) return ctx;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ctx = new AC();
+    masterGain = ctx.createGain();
+    masterGain.gain.value = 1.0;
+    masterGain.connect(ctx.destination);
+    return ctx;
+  }
+
+  function tryResume() {
+    try {
+      var c = ensureContext();
+      if (!c) return;
+      if (c.state === "suspended") c.resume();
+    } catch (e) {}
+  }
+
+  function startKeepAlive() {
+    try {
+      var c = ensureContext();
+      if (!c || !masterGain) return;
+      if (keepAliveOsc) return;
+      keepAliveOsc = c.createOscillator();
+      var g = c.createGain();
+      g.gain.value = 0.00001;
+      keepAliveOsc.frequency.value = 1;
+      keepAliveOsc.connect(g);
+      g.connect(masterGain);
+      keepAliveOsc.start();
+    } catch (e) {}
+  }
+
+  function armByUserGesture() {
+    if (enabled) return;
+    tryResume();
+    enabled = true;
+    startKeepAlive();
+  }
+
+  function bindUserGesture(target) {
+    if (bound) return;
+    bound = true;
+    target = target || document;
+
+    var once = function () {
+      armByUserGesture();
+      try {
+        target.removeEventListener("pointerdown", once);
+        target.removeEventListener("touchstart", once);
+        target.removeEventListener("mousedown", once);
+        target.removeEventListener("click", once);
+      } catch (e) {}
+    };
+
+    target.addEventListener("pointerdown", once, { passive: true });
+    target.addEventListener("touchstart", once, { passive: true });
+    target.addEventListener("mousedown", once, { passive: true });
+    target.addEventListener("click", once, { passive: true });
+
+    document.addEventListener("visibilitychange", function () {
+      if (!enabled) return;
+      tryResume();
+    });
+  }
+
+  function playDdiring() {
+    if (!enabled) return false;
+    var c = ensureContext();
+    if (!c || !masterGain) return false;
+    tryResume();
+
+    var now = c.currentTime;
+    var scheduleTone = function (freq, t, dur) {
+      var osc = c.createOscillator();
+      var g = c.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.8, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+      osc.connect(g);
+      g.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
+    };
+
+    scheduleTone(880, now + 0.00, 0.18);
+    scheduleTone(1320, now + 0.20, 0.22);
+    return true;
+  }
+
+  return { bindUserGesture: bindUserGesture, playDdiring: playDdiring };
+})()
+
+var NotifySetting = (function () {
+  // 알림(띠리링 + 백그라운드 시스템 알림 시도) ON/OFF 설정
+  // - 기본값: 켜짐 (KEY가 없거나 "1"이면 켜짐, "0"이면 꺼짐)
+  // - 시스템 알림은 권한(granted)일 때 + 화면이 보이지 않을 때(document.hidden)만 "시도"합니다.
+  // - Service Worker / Push 는 사용하지 않습니다(앱이 실행 중일 때만 동작).
+  var KEY = "mypai_notify_enabled";
+
+  function getPermission() {
+    if (!("Notification" in window)) return "unsupported";
+    try { return Notification.permission || "default"; } catch (e) { return "default"; }
+  }
+
+  function isEnabled() {
+    try {
+      var v = localStorage.getItem(KEY);
+      return v !== "0"; // 기본 ON
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function setEnabled(v) {
+    try { localStorage.setItem(KEY, v ? "1" : "0"); } catch (e) {}
+  }
+
+  function getMenuLabel() {
+    var perm = getPermission();
+    var on = isEnabled();
+
+    if (perm === "denied") return on ? "🔔 알림: 켜짐(차단됨)" : "🔕 알림: 꺼짐(차단됨)";
+    if (perm === "unsupported") return on ? "🔔 알림: 켜짐(지원안함)" : "🔕 알림: 꺼짐(지원안함)";
+    if (perm === "default" && on) return "🔔 알림: 켜짐(권한 필요)";
+    return on ? "🔔 알림: 켜짐" : "🔕 알림: 꺼짐";
+  }
+
+  function requestPermission() {
+    if (!("Notification" in window)) return Promise.resolve("unsupported");
+    try {
+      var p = Notification.requestPermission();
+      if (p && typeof p.then === "function") return p;
+    } catch (e) {}
+    return new Promise(function (resolve) {
+      try { Notification.requestPermission(function (perm) { resolve(perm); }); }
+      catch (e2) { resolve("default"); }
+    });
+  }
+
+  function toggle(showStatus) {
+    var next = !isEnabled();
+    setEnabled(next);
+
+    if (!next) {
+      showStatus && showStatus("알림을 껐어요.");
+      return Promise.resolve(false);
+    }
+
+    // 켜는 경우: 시스템 알림은 권한이 있으면 백그라운드에서만 시도
+    var perm = getPermission();
+    if (perm === "default") {
+      // 사용자가 "알림 켜기"를 눌렀을 때만 권한 요청(자동 팝업 방지)
+      showStatus && showStatus("백그라운드 알림을 쓰려면 권한이 필요해요.");
+      return requestPermission().then(function (p) {
+        if (p === "granted") showStatus && showStatus("알림을 켰어요.");
+        else if (p === "denied") showStatus && showStatus("브라우저 설정에서 알림 허용이 필요해요.");
+        else showStatus && showStatus("알림 권한이 아직 없어요.");
+        return true;
+      });
+    }
+
+    if (perm === "denied") {
+      showStatus && showStatus("알림은 켜졌지만, 시스템 알림은 차단돼 있어요.");
+      return Promise.resolve(true);
+    }
+
+    showStatus && showStatus("알림을 켰어요.");
+    return Promise.resolve(true);
+  }
+
+  function maybeShow(msg) {
+    if (!isEnabled()) return;
+    if (getPermission() !== "granted") return;
+
+    // 보이는 상태에서는 시스템 알림 생략(중복 방지)
+    try {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") return;
+    } catch (e) {}
+
+    var title = "새 메시지";
+    var body = "새 메시지가 도착했어요.";
+    try {
+      var t = msg && msg.type || "text";
+      var summary = "";
+      if (t === "image") summary = "사진";
+      else if (t === "file") summary = "파일";
+      else summary = (msg && msg.text) ? String(msg.text) : "메시지";
+      body = (msg && msg.nickname ? (msg.nickname + " : ") : "") + summary;
+      if (body.length > 80) body = body.slice(0, 77) + "...";
+    } catch (e2) {}
+
+    var opts = {
+      body: body,
+      tag: "mypai-social-chat",
+      renotify: true
+    };
+
+    try { new Notification(title, opts); } catch (e3) {}
+  }
+
+  return {
+    isEnabled: isEnabled,
+    getMenuLabel: getMenuLabel,
+    toggle: toggle,
+    maybeShow: maybeShow
+  };
+})();
+
+
+;
+
+  function isEmojiOnlyText(text) {
+    if (!text || typeof text !== "string") return false;
+    var compact = text.replace(/\s+/g, "");
+    return /^(?:\:e(0?[1-9]|1[0-2])\:)+$/.test(compact);
+  }
+
+  // [[FILE]]<url>|<encodeURIComponent(filename)> 형태 파싱
+  function parseFileToken(raw) {
+    if (!raw || typeof raw !== "string") return null;
+    if (raw.indexOf("[[FILE]]") !== 0) return null;
+    var rest = raw.replace("[[FILE]]", "");
+    var parts = rest.split("|");
+    var url = (parts[0] || "").trim();
+    var encName = parts.slice(1).join("|");
+    var name = "파일";
+    try {
+      if (encName) name = decodeURIComponent(encName.trim());
+    } catch (e) {
+      if (encName) name = encName.trim();
+    }
+    if (!url) return null;
+    return { url: url, name: name };
+  }
+
+  // [[IMG]]<url> 형태 파싱
+  function parseImageToken(raw) {
+    if (!raw || typeof raw !== "string") return null;
+    if (raw.indexOf("[[IMG]]") !== 0) return null;
+    var url = raw.replace("[[IMG]]", "").trim();
+    if (!url) return null;
+    return { url: url };
+  }
+
+  // Drive URL에서 FILEID 추출
+  function extractDriveId(url) {
+    url = String(url || "").trim();
+    if (!url) return "";
+    try {
+      // https://drive.google.com/file/d/FILEID/view?...
+      var m = url.match(/drive\.google\.com\/file\/d\/([^\/\?]+)/i);
+      if (m && m[1]) return m[1];
+      // https://drive.google.com/open?id=FILEID
+      var m2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/i);
+      if (m2 && m2[1]) return m2[1];
+      // https://drive.google.com/uc?id=FILEID&...
+      var m3 = url.match(/drive\.google\.com\/uc\?[^#]*id=([^&]+)/i);
+      if (m3 && m3[1]) return m3[1];
+      // 이미 fileId만 온 경우
+      if (/^[a-zA-Z0-9_-]{10,}$/.test(url) && url.indexOf("http") !== 0) return url;
+    } catch (e) {}
+    return "";
+  }
+
+  // Drive '미리보기 페이지' URL을 <img>에서 보이는 직접 URL로 변환(구버전 호환)
+  function normalizeDriveUrl(url) {
+    url = String(url || "").trim();
+    if (!url) return "";
+    try {
+      var id = extractDriveId(url);
+      if (id) return "https://drive.google.com/uc?export=view&id=" + id;
+    } catch (e) {}
+    return url;
+  }
+
+  // 채팅 목록에서는 가벼운 썸네일로 보여주기(데이터 절약)
+  function toChatThumbUrl(url) {
+    url = String(url || "").trim();
+    if (!url) return "";
+    try {
+      var id = extractDriveId(url);
+      if (id) {
+        // w480 정도면 모바일에서도 충분히 선명(표시 크기는 CSS로 제한)
+        return "https://drive.google.com/thumbnail?id=" + id + "&sz=w480";
+      }
+    } catch (e) {}
+    // Drive가 아니면 그대로(또는 normalize)
+    return normalizeDriveUrl(url);
+  }
+
+    function getFirebasePath(roomId) {
+    // Firebase Realtime DB 에 메시지를 저장합니다.
+    // 경로: /messages/{roomId}
+    if (!roomId) return null;
+    var safeId = String(roomId).replace(/[.#$\[\]\/]/g, "_");
+    return "messages/" + safeId;
+  }
+
+  // 30일 이전 Firebase 메시지 삭제 (Firebase만, 시트는 유지)
+  var __lastPruneTs = {};
+  function __pruneOldFirebaseMessages(roomId) {
+    if (!roomId) return;
+    var now = Date.now();
+    if (__lastPruneTs[roomId] && (now - __lastPruneTs[roomId]) < 60000) return; // 1분 쓰로틀
+    __lastPruneTs[roomId] = now;
+    try {
+      var cutoff = now - (30 * 24 * 60 * 60 * 1000);
+      var __fbDb2 = ensureFirebase();
+      var __fbPath2 = getFirebasePath(roomId);
+      if (!__fbDb2 || !__fbPath2) return;
+      __fbDb2.ref(__fbPath2).orderByChild("ts").endAt(cutoff).once("value").then(function (snap) {
+        if (!snap.exists()) return;
+        var updates = {};
+        snap.forEach(function (child) { updates[child.key] = null; });
+        if (Object.keys(updates).length > 0) __fbDb2.ref(__fbPath2).update(updates).catch(function(){});
+      }).catch(function(){});
+    } catch (e) {}
+  }
+
+  // Firebase 메시지 실시간 구독 핸들 (방 전환 시 해제용)
+  var __fbMsgSub = null;
+
+  function stopFirebaseMsgListen() {
+    try {
+      if (__fbMsgSub && __fbMsgSub.ref) {
+        __fbMsgSub.ref.off("child_added", __fbMsgSub.handler);
+        __fbMsgSub = null;
+      }
+    } catch (e) {}
+  }
+
+  function startFirebaseMsgListen(roomId) {
+    stopFirebaseMsgListen();
+    var __fbPath3 = getFirebasePath(roomId);
+    var __fbDb3 = ensureFirebase();
+    if (!__fbDb3 || !__fbPath3) return;
+
+    try {
+      var q = __fbDb3.ref(__fbPath3).orderByChild("ts").limitToLast(100);
+      var handler = function (snap) {
+        try {
+          if (currentRoomId !== roomId) return; // 방 바뀌면 무시
+          var val = snap.val();
+          if (!val) return;
+
+          var mid = val.mid || snap.key;
+          // 이미 messages 배열에 있으면 중복 건너뜀
+          for (var i = 0; i < messages.length; i++) {
+            if (messages[i] && (messages[i].key === snap.key || messages[i].mid === mid)) return;
+          }
+
+          var msg = {
+            key:       snap.key,
+            mid:       mid,
+            user_id:   val.user_id  || "",
+            nickname:  val.nickname || "익명",
+            text:      val.text     || "",
+            type:      val.type     || "text",
+            image_url: val.url || val.image_url || "",
+            file_url:  val.url || val.file_url  || "",
+            file_name: val.fileName || val.file_name || "",
+            ts:        val.ts || Date.now(),
+            room_id:   roomId,
+            _firebase: true
+          };
+
+          // 이미지/파일 타입 보정
+          if (msg.type === "photo") msg.type = "image";
+
+          messages.push(msg);
+          messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
+          if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
+          renderAll();
+        } catch (e) {}
+      };
+      q.on("child_added", handler);
+      __fbMsgSub = { ref: q, handler: handler };
+      // 30일 청소
+      setTimeout(function () { __pruneOldFirebaseMessages(roomId); }, 3000);
+    } catch (e2) {
+      console.warn("[messenger] Firebase 구독 실패:", e2.message || e2);
+    }
+  }
+
+  function stopListen() {
+    // 방 이동 시 이전 방 리스너 확실히 해제(중복 수신/성능 저하 방지)
+    try {
+      if (window.RoomMessageStream && typeof window.RoomMessageStream.stop === "function") {
+        window.RoomMessageStream.stop();
+      }
+    } catch (e0) {}
+
+    stopFirebaseMsgListen();
+
+    // 혹시 남아있는 ref 리스너까지 정리(안전망)
+    try {
+      if (ref && typeof ref.off === "function") ref.off();
+    } catch (e) {}
+  }
+
+
+  // ------------------------------------------------------------
+  // Firebase Anonymous Auth (규칙 auth != null 대응)
+  // - 앱 시작 시 익명 로그인 자동 수행(사용자에게 구글 로그인 요구 X)
+  // - init 이후 signInAnonymously() 1회 보장
+  // ------------------------------------------------------------
+  var __anonAuthPromise = null;
+
+  function ensureAnonAuth() {
+    // 익명 Auth를 쓰지 않는 구성(Realtime DB를 "relay"로만 사용)
+    // - Auth 관련 네트워크 호출(identitytoolkit/securetoken) 자체를 하지 않음
+    // - DB 접근은 rules에서 해당 경로를 unauth 허용하도록 설정 필요
+    return Promise.resolve(true);
+  }
+
+
+  function ensureFirebase() {
+    if (!window.firebase || !firebase.initializeApp) {
+      console.warn("[messenger] Firebase SDK 가 없습니다.");
+      showStatus("실시간 서버 연결에 실패했어요.");
+      return null;
+    }
+    try {
+      if (firebase.apps && firebase.apps.length > 0) {
+        app = firebase.app();
+      } else {
+        app = firebase.initializeApp(FIREBASE_CONFIG);
+      }
+      db = firebase.database();
+      var __p = getFirebasePath(currentRoomId);
+      ref = __p ? db.ref(__p) : null;
+      return db;
+    } catch (e) {
+      console.error("[messenger] Firebase 초기화 실패:", e);
+      showStatus("연결 중 문제가 발생했어요.");
+      return null;
+    }
+  }
+
+  function loadUserFromStorage() {
+    try {
+      var raw = localStorage.getItem("ghostUser");
+      if (!raw) return;
+      var obj = JSON.parse(raw);
+      if (!obj || !obj.user_id) return;
+      myId = obj.user_id;
+      myNickname = obj.nickname || obj.username || "익명";
+    } catch (e) {
+      console.warn("[messenger] ghostUser 파싱 실패:", e);
+    }
+  }
+
+  function getSafeNickname() {
+    if (myNickname && String(myNickname).trim()) return String(myNickname).trim();
+    if (window.currentUser && window.currentUser.nickname) {
+      return String(window.currentUser.nickname).trim();
+    }
     return "익명";
   }
 
-  /* ===== 방 변경 콜백 ===== */
-  var currentRoomId = null;
-  var currentSub    = null; // Firebase 구독 핸들
-  var msgKeySet     = {};   // 중복 방지
-
-  window.__onRoomChanged = function (roomId, roomObj) {
-    roomId = roomId ? String(roomId).trim() : "";
-    if (currentRoomId === roomId) return;
-    currentRoomId = roomId;
-
-    // 이전 구독 해제
-    if (window.FirebaseMessages) {
-      window.FirebaseMessages.unsubscribe(currentSub);
-    } else if (window.RoomMessageStream) {
-      window.RoomMessageStream.stop();
-    }
-    currentSub  = null;
-    msgKeySet   = {};
-    lastDateStr = "";  // ← 방 전환 시 날짜 구분선 초기화
-
-    var body = document.getElementById("messengerBody");
-    if (!body) return;
-
-    if (!roomId) {
-      if (window.RoomGuard) window.RoomGuard.renderNoRoomHint(body);
-      return;
-    }
-
-    body.innerHTML = '<div class="empty-hint" id="loadingHint">대화 내역 불러오는 중...</div>';
-
-    // Firebase 미설정 안내
-    if (window.FirebaseMessages && !window.FirebaseMessages.isReady()) {
-      body.innerHTML = [
-        '<div class="empty-hint" style="color:#ef4444;padding:16px;line-height:1.6;">',
-        '⚠️ Firebase 설정이 필요합니다.<br>',
-        '<small>js/config.js 의 <b>FIREBASE_CONFIG</b> 값을<br>',
-        'Firebase Console에서 복사해서 채워 주세요.</small>',
-        '</div>'
-      ].join("");
-      return;
-    }
-
-    // Firebase 구독
-    if (window.FirebaseMessages) {
-      currentSub = window.FirebaseMessages.subscribe(roomId, function (item) {
-        onFirebaseMessage(item.key, item.val, body);
-      }, 100);
-    }
-
-    // 로딩 힌트 제거 (첫 메시지 받은 후 or 1.5초 후)
-    setTimeout(function () {
-      var hint = document.getElementById("loadingHint");
-      if (hint) {
-        if (!hint.nextSibling) {
-          hint.textContent = "아직 대화가 없어요. 첫 메시지를 보내 보세요!";
-        } else {
-          hint.remove();
-        }
+  function requireLogin() {
+    if (myId) return true;
+    showStatus("소통 채팅을 쓰려면 먼저 로그인해 주세요.");
+    try {
+      if (window.parent && typeof window.parent.openLoginPanel === "function") {
+        window.parent.openLoginPanel();
       }
-    }, 1500);
-  };
+    } catch (e) {}
+    return false;
+  }
 
-  /* ===== Firebase 메시지 수신 → 말풍선 렌더 ===== */
-  function onFirebaseMessage(key, val, body) {
-    if (!val || !key) return;
-    if (msgKeySet[key]) return;
-    msgKeySet[key] = true;
+  function showStatus(text) {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.classList.add("show");
+    clearTimeout(showStatus._timer);
+    showStatus._timer = setTimeout(function () {
+      statusEl.classList.remove("show");
+    }, 1600);
+  }
 
-    // 로딩 힌트 제거
-    var hint = document.getElementById("loadingHint");
-    if (hint) hint.remove();
+  function formatDateKey(ts) {
+    var d = new Date(ts || Date.now());
+    var y = d.getFullYear();
+    var m = (d.getMonth() + 1).toString().padStart(2, "0");
+    var day = d.getDate().toString().padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  }
 
-    var me = myNickname();
-    var myUid = (window.currentUser && window.currentUser.user_id) || "";
-    // user_id 있으면 우선 비교, 없으면 nickname 비교
-    var isMe = myUid
-      ? (String(val.user_id || "") === myUid)
-      : (String(val.nickname || "") === me);
+  function formatDateLabel(ts) {
+    var d = new Date(ts || Date.now());
+    var y = d.getFullYear();
+    var m = (d.getMonth() + 1).toString().padStart(2, "0");
+    var day = d.getDate().toString().padStart(2, "0");
+    return y + "." + m + "." + day;
+  }
 
-    // 날짜 구분선
-    var ts = Number(val.ts || 0);
-    insertDateSeparatorIfNeeded(body, ts);
+  function appendDateSeparator(ts) {
+    if (!bodyEl) return;
+    var wrap = document.createElement("div");
+    wrap.className = "date-separator";
+    var span = document.createElement("span");
+    span.textContent = formatDateLabel(ts);
+    wrap.appendChild(span);
+    bodyEl.appendChild(wrap);
+  }
 
-    // 말풍선 생성
-    var row = buildMessageRow(val, isMe);
-    body.appendChild(row);
+  function appendMessage(msg) {
+    if (!bodyEl) return;
+    var wrapper = document.createElement("div");
+    // user_id 있으면 우선 비교, 없으면 nickname으로 fallback
+    var isMe = myId && msg.user_id
+      ? (msg.user_id === myId)
+      : (msg.nickname && myNickname && msg.nickname === myNickname);
+    wrapper.className = "msg-row " + (isMe ? "me" : "other");
 
-    // 맨 아래 스크롤 (새 메시지가 화면 아래쪽에 있을 때만)
-    var isNearBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 120;
-    if (isNearBottom || isMe) {
-      requestAnimationFrame(function () {
-        body.scrollTop = body.scrollHeight;
-      });
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    // 메시지 타입: text | image | file
+    var type = msg.type || "text";
+    var text = msg.text || "";
+
+    if (type === "image" && msg.image_url) {
+      bubble.classList.add("photo-bubble");
+      var img = document.createElement("img");
+      img.className = "chat-photo";
+      img.setAttribute("data-zoomable", "1");
+      img.alt = "사진";
+      img.loading = "lazy";
+      img.dataset.fullsrc = normalizeDriveUrl(msg.image_url);
+      img.src = toChatThumbUrl(msg.image_url);
+      img.onerror = function () {
+        try {
+          bubble.innerHTML = "";
+          bubble.classList.remove("photo-bubble");
+          bubble.classList.add("file-bubble");
+          var aErr = document.createElement("a");
+          aErr.className = "file-link";
+          aErr.href = msg.image_url;
+          aErr.target = "_blank";
+          aErr.rel = "noopener";
+          aErr.textContent = "📷 사진 열기";
+          bubble.appendChild(aErr);
+        } catch (e) {}
+      };
+      bubble.appendChild(img);
+    } else if (type === "file" && (msg.file_url || msg.file_name)) {
+      bubble.classList.add("file-bubble");
+      var a = document.createElement("a");
+      a.className = "file-link";
+      a.href = msg.file_url || "#";
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "📎 " + (msg.file_name || "파일 열기");
+      bubble.appendChild(a);
+    } else {
+      // 시트 기록(텍스트)에서 [[IMG]]/[[FILE]]로 복원되는 경우
+      var parsedImg = parseImageToken(text);
+      if (parsedImg) {
+        bubble.classList.add("photo-bubble");
+        var img2 = document.createElement("img");
+        img2.className = "chat-photo";
+        img2.setAttribute("data-zoomable", "1");
+        img2.alt = "사진";
+        img2.loading = "lazy";
+        img2.dataset.fullsrc = normalizeDriveUrl(parsedImg.url);
+        img2.src = toChatThumbUrl(parsedImg.url);
+        img2.onerror = function () {
+          try {
+            bubble.innerHTML = "";
+            bubble.classList.remove("photo-bubble");
+            bubble.classList.add("file-bubble");
+            var aImg = document.createElement("a");
+            aImg.className = "file-link";
+            aImg.href = parsedImg.url;
+            aImg.target = "_blank";
+            aImg.rel = "noopener";
+            aImg.textContent = "📷 사진 열기";
+            bubble.appendChild(aImg);
+          } catch (e) {}
+        };
+        bubble.appendChild(img2);
+      } else {
+      var parsedFile = parseFileToken(text);
+      if (parsedFile) {
+        bubble.classList.add("file-bubble");
+        var a2 = document.createElement("a");
+        a2.className = "file-link";
+        a2.href = parsedFile.url;
+        a2.target = "_blank";
+        a2.rel = "noopener";
+        a2.textContent = "📎 " + (parsedFile.name || "파일 열기");
+        bubble.appendChild(a2);
+      } else {
+      var emojiOnly = isEmojiOnlyText(text);
+      if (emojiOnly) bubble.classList.add("emoji-only");
+      if (typeof window.renderTextWithEmojis === "function") {
+        try {
+          window.renderTextWithEmojis(text, bubble);
+        } catch (e) {
+          bubble.textContent = text;
+        }
+      } else {
+        bubble.textContent = text;
+      }
+      }
+      }
     }
-  }
 
-  /* ===== 날짜 구분선 ===== */
-  var lastDateStr = "";
-  function insertDateSeparatorIfNeeded(body, ts) {
-    if (!ts) return;
-    var d = new Date(ts);
-    var str = d.getFullYear() + "." + pad(d.getMonth()+1) + "." + pad(d.getDate());
-    if (str === lastDateStr) return;
-    lastDateStr = str;
-    var sep = document.createElement("div");
-    sep.className = "date-separator";
-    sep.innerHTML = "<span>" + str + "</span>";
-    body.appendChild(sep);
-  }
+    // 링크 자동 변환 + 유튜브 미리보기(텍스트 메시지)
+    if (type === "text") {
+      try {
+        if (window.ChatLinkify && typeof window.ChatLinkify.enhanceBubble === "function") {
+          window.ChatLinkify.enhanceBubble(bubble, text);
+        }
+      } catch (e) {}
+    }
 
-  /* ===== 말풍선 행 생성 (카톡 스타일) ===== */
-  function buildMessageRow(val, isMe) {
-    var row = document.createElement("div");
-    row.className = "msg-row " + (isMe ? "me" : "other");
 
+    // ── 카톡 스타일 조립 ──────────────────────────────────────
+    //
+    //  [other]  [아바타] [이름]
+    //           [버블] [시간]
+    //
+    //  [me]              [시간] [버블]
+    //
     var inner = document.createElement("div");
     inner.className = "msg-inner";
 
     if (!isMe) {
-      // 왼쪽: 프로필 이미지
-      var avatar = buildAvatar(val.nickname || "익명");
-      inner.appendChild(avatar);
+      // 아바타
+      var avatarWrap = document.createElement("div");
+      avatarWrap.style.cssText = "flex:0 0 auto;width:36px;margin-right:6px;align-self:flex-start;";
+      var avatarImg = document.createElement("img");
+      avatarImg.className = "msg-avatar";
+      avatarImg.setAttribute("data-profile-nick", msg.nickname || "익명");
+      avatarImg.alt = msg.nickname || "익명";
+      avatarImg.style.cssText = "width:36px;height:36px;border-radius:50%;object-fit:cover;background:#e0e7ff;display:block;";
+      // 프로필 이미지: ProfileManager 캐시 우선, 없으면 기본 아바타
+      avatarImg.src = (window.ProfileManager && window.ProfileManager.getAvatarUrl)
+        ? window.ProfileManager.getAvatarUrl(msg.nickname || "")
+        : "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#c7d2fe"/><circle cx="20" cy="15" r="7" fill="#818cf8"/><ellipse cx="20" cy="34" rx="12" ry="9" fill="#818cf8"/></svg>');
+      avatarImg.onerror = function () {
+        this.onerror = null;
+        this.src = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#c7d2fe"/><circle cx="20" cy="15" r="7" fill="#818cf8"/><ellipse cx="20" cy="34" rx="12" ry="9" fill="#818cf8"/></svg>');
+      };
+      // 백그라운드 Drive 캐시
+      if (window.ProfileManager && window.ProfileManager.fetchAndCacheProfile) {
+        setTimeout(function () { window.ProfileManager.fetchAndCacheProfile(msg.nickname || ""); }, 400);
+      }
+      avatarWrap.appendChild(avatarImg);
+      inner.appendChild(avatarWrap);
     }
 
+    // 콘텐츠 래퍼 (이름 + [버블+시간])
     var contentWrap = document.createElement("div");
-    contentWrap.className = "msg-content-wrap";
     contentWrap.style.cssText = "display:flex;flex-direction:column;gap:2px;" + (isMe ? "align-items:flex-end;" : "align-items:flex-start;");
 
-    // 보낸이 이름 (상대방만)
+    // 상대방 이름
     if (!isMe) {
       var nameEl = document.createElement("div");
       nameEl.className = "msg-sender-name";
-      nameEl.textContent = val.nickname || "익명";
-      nameEl.style.cssText = "font-size:11px;font-weight:700;color:#374151;padding-left:4px;margin-bottom:1px;";
+      nameEl.textContent = msg.nickname || "익명";
       contentWrap.appendChild(nameEl);
     }
 
-    // 시간 + 버블 행
+    // 버블 + 시간 행
     var bubbleRow = document.createElement("div");
     bubbleRow.style.cssText = "display:flex;align-items:flex-end;gap:4px;" + (isMe ? "flex-direction:row-reverse;" : "");
 
-    var bubble = buildBubble(val);
-    var timeEl = buildTimeEl(val.ts);
+    // 시간
+    var timeEl = document.createElement("div");
+    timeEl.className = "msg-meta";
+    if (msg.ts) {
+      var d = new Date(__smParseTs(msg.ts) || Date.now());
+      var hh = d.getHours();
+      var mm = d.getMinutes().toString().padStart(2, "0");
+      var ampm = hh < 12 ? "오전" : "오후";
+      hh = hh % 12 || 12;
+      timeEl.textContent = ampm + " " + hh + ":" + mm;
+    }
 
     bubbleRow.appendChild(bubble);
     bubbleRow.appendChild(timeEl);
     contentWrap.appendChild(bubbleRow);
 
     inner.appendChild(contentWrap);
-    row.appendChild(inner);
-    return row;
+    wrapper.appendChild(inner);
+
+    bodyEl.appendChild(wrapper);
+
+    // 맨 아래에 가까우면 자동 스크롤
+    var isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 150;
+    if (isNearBottom || isMe) bodyEl.scrollTop = bodyEl.scrollHeight;
   }
 
-  /* ===== 아바타 이미지 ===== */
-  function buildAvatar(nickname) {
-    var wrap = document.createElement("div");
-    wrap.style.cssText = "flex:0 0 auto;width:34px;height:34px;margin-right:4px;align-self:flex-start;";
+  // ------------------------------------------------------------
+  // 이미지 확대 보기 (사진/미디어 메시지용)
+  //  - img.chat-photo 또는 [data-zoomable="1"] 클릭 시 전체 화면 확대
+  //  - 다시 누르면(오버레이 클릭) 닫힘
+  // ------------------------------------------------------------
+  function initImageZoom() {
+    zoomOverlay = document.getElementById("imageZoomOverlay");
+    zoomImg = document.getElementById("imageZoomImg");
+    var zoomLink = document.getElementById("imageZoomOpenLink");
+    if (!zoomOverlay || !zoomImg || !bodyEl) return;
 
-    var img = document.createElement("img");
-    img.className = "msg-avatar";
-    img.setAttribute("data-profile-nick", nickname);
-    img.src = window.ProfileManager ? window.ProfileManager.getAvatarUrl(nickname)
-            : (window.ProfileManager && window.ProfileManager.DEFAULT_AVATAR) || "";
-    img.alt = nickname;
-    img.style.cssText = "width:34px;height:34px;border-radius:50%;object-fit:cover;background:#e0e7ff;";
-    img.onerror = function () {
-      this.onerror = null;
-      this.src = window.ProfileManager ? window.ProfileManager.DEFAULT_AVATAR : "";
+    function openZoom(src) {
+      if (!src) return;
+
+      // 원본 열기 링크
+      try {
+        if (zoomLink) {
+          zoomLink.href = src;
+          zoomLink.style.display = "block";
+        }
+      } catch (e0) {}
+
+      // Drive 링크는 여러 방식으로 폴백 시도
+      var tries = [];
+      try {
+        tries.push(src);
+        var id = null;
+        try { id = extractDriveId(src); } catch (e1) { id = null; }
+        if (id) {
+          tries.push("https://drive.google.com/uc?export=download&id=" + id);
+          tries.push("https://drive.google.com/thumbnail?id=" + id + "&sz=w2048");
+        }
+      } catch (e2) {
+        tries = [src];
+      }
+
+      zoomImg.dataset.tryIndex = "0";
+      zoomImg.dataset.tryList = JSON.stringify(tries);
+      zoomImg.src = tries[0];
+
+      zoomOverlay.classList.add("open");
+      zoomOverlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("no-scroll");
+    }
+    function closeZoom() {
+      zoomOverlay.classList.remove("open");
+      zoomOverlay.setAttribute("aria-hidden", "true");
+      zoomImg.removeAttribute("src");
+      document.body.classList.remove("no-scroll");
+    }
+
+    // 확대 이미지 로드 실패 시 Drive 폴백(다운로드/큰 썸네일) 순서로 재시도
+    zoomImg.onerror = function () {
+      try {
+        var list = [];
+        try { list = JSON.parse(zoomImg.dataset.tryList || "[]") || []; } catch (e1) { list = []; }
+        var i = Number(zoomImg.dataset.tryIndex || "0");
+        if (i + 1 < list.length) {
+          zoomImg.dataset.tryIndex = String(i + 1);
+          zoomImg.src = list[i + 1];
+          return;
+        }
+        // 모두 실패하면 원본 열기 링크만 남김
+        if (zoomLink) zoomLink.style.display = "block";
+      } catch (e0) {}
     };
 
-    // 백그라운드에서 Drive 이미지 캐시 보완
-    if (window.ProfileManager) {
-      setTimeout(function () {
-        window.ProfileManager.fetchAndCacheProfile(nickname);
-      }, 300);
-    }
+    // 채팅 내 이미지 클릭(이벤트 위임)
+    bodyEl.addEventListener("click", function (e) {
+      var img = e.target && e.target.closest ? e.target.closest("img") : null;
+      if (!img) return;
+      var isZoomable = img.classList.contains("chat-photo") || img.getAttribute("data-zoomable") === "1";
+      if (!isZoomable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openZoom(img.dataset.fullsrc || img.currentSrc || img.src);
+    });
 
-    wrap.appendChild(img);
-    return wrap;
-  }
+    // 오버레이를 누르면 닫힘(다시 누르면 돌아가기)
+    zoomOverlay.addEventListener("click", function () {
+      closeZoom();
+    });
 
-  /* ===== 말풍선 내용 ===== */
-  function buildBubble(val) {
-    var bubble = document.createElement("div");
-    bubble.className = "bubble";
-
-    var type = String(val.type || "text");
-
-    if (type === "image" || type === "photo") {
-      bubble.classList.add("photo-bubble");
-      var img = document.createElement("img");
-      img.className = "chat-photo";
-      img.src = val.url || "";
-      img.alt = "사진";
-      img.setAttribute("data-zoomable", "1");
-      img.loading = "lazy";
-      img.addEventListener("click", function () {
-        openZoom(val.url || "", val.url || "");
-      });
-      bubble.appendChild(img);
-
-    } else if (type === "file") {
-      bubble.classList.add("file-bubble");
-      var a = document.createElement("a");
-      a.href = val.url || "#";
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.className = "file-link";
-      a.textContent = "📎 " + (val.fileName || "파일 다운로드");
-      bubble.appendChild(a);
-
-    } else if (type === "emoji") {
-      bubble.classList.add("emoji-only");
-      var eImg = document.createElement("img");
-      eImg.src = val.url || "";
-      eImg.alt = "이모티콘";
-      eImg.className = "chat-emoji";
-      bubble.appendChild(eImg);
-
-    } else {
-      // 텍스트 (링크 처리)
-      var text = String(val.text || "");
-      if (typeof window.linkifyText === "function") {
-        bubble.innerHTML = window.linkifyText(text);
-      } else {
-        bubble.textContent = text;
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && zoomOverlay.classList.contains("open")) {
+        closeZoom();
       }
-    }
-    return bubble;
+    });
   }
 
-  /* ===== 시간 표시 ===== */
-  function buildTimeEl(ts) {
-    var el = document.createElement("div");
-    el.className = "msg-meta";
-    if (ts) {
-      var d = new Date(Number(ts));
-      var h = d.getHours(), m = d.getMinutes();
-      var ampm = h < 12 ? "오전" : "오후";
-      h = h % 12 || 12;
-      el.textContent = ampm + " " + h + ":" + pad(m);
-    }
-    return el;
-  }
-
-  function pad(n) { return n < 10 ? "0" + n : String(n); }
-
-  /* ===== 줌 오버레이 ===== */
-  function openZoom(src, href) {
-    var overlay = document.getElementById("imageZoomOverlay");
-    var img     = document.getElementById("imageZoomImg");
-    var link    = document.getElementById("imageZoomOpenLink");
-    if (!overlay || !img) return;
-    img.src = src;
-    if (link) link.href = href || src;
-    overlay.classList.add("open");
-    try { document.body.classList.add("no-scroll"); } catch (e) {}
-  }
-
-  /* ===== 메시지 전송 ===== */
-  function sendMessage() {
-    var input = document.getElementById("msgInput");
-    if (!input) return;
-    var text = (input.value || "").trim();
-    if (!text) return;
-    if (!currentRoomId) {
-      if (window.RoomGuard) window.RoomGuard.openRoomPanel();
+  function renderAll() {
+    if (!bodyEl) return;
+    bodyEl.innerHTML = "";
+    if (!messages || messages.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "empty-hint";
+      empty.textContent = "아직 올라온 소통 메시지가 없어요. 먼저 말을 걸어 볼래요?";
+      bodyEl.appendChild(empty);
       return;
     }
 
-    var me = myNickname();
-    input.value = "";
-
-    var msgData = {
-      user_id:  (window.currentUser && window.currentUser.user_id) || "",
-      nickname: me,
-      text:     text,
-      ts:       Date.now(),
-      type:     "text"
-    };
-
-    // 1) Firebase 저장 (빠른 경로)
-    if (window.FirebaseMessages) {
-      window.FirebaseMessages.saveMessage(currentRoomId, msgData).catch(function () {});
-    }
-
-    // 2) 구글 시트 백업 (느린 경로, 실패해도 무관)
-    if (typeof postToSheet === "function") {
-      try {
-        postToSheet({
-          mode:    "social_send",
-          room_id: currentRoomId,
-          nickname: me,
-          message: text,
-          ts:      msgData.ts
-        }).catch(function () {});
-      } catch (e) {}
-    }
+    var lastKey = null;
+    messages.forEach(function (m) {
+      if (!m) return;
+      var ts = m.ts || Date.now();
+      var key = formatDateKey(ts);
+      if (lastKey !== key) {
+        appendDateSeparator(ts);
+        lastKey = key;
+      }
+      appendMessage(m);
+    });
   }
 
-  /* ===== 이모티콘/사진 전송 (외부에서 호출) ===== */
-  window.sendChatEmoji = function (url) {
-    if (!currentRoomId) return;
-    var me = myNickname();
-    var msgData = {
-      user_id:  (window.currentUser && window.currentUser.user_id) || "",
-      nickname: me,
-      text:     "",
-      ts:       Date.now(),
-      type:     "emoji",
-      url:      url
-    };
-    if (window.FirebaseMessages) {
-      window.FirebaseMessages.saveMessage(currentRoomId, msgData).catch(function () {});
-    }
-    if (typeof postToSheet === "function") {
+  async function loadRecentFromSheet(roomId) {
+  var wantedRoomId = String(roomId || currentRoomId || "").trim();
+  var seq = ++__loadSeq;
+  if (typeof window.postToSheet !== "function") return;
+  try {
+    var res = await window.postToSheet({
+      mode: "social_recent_room",
+      room_id: wantedRoomId,
+      nickname: getSafeNickname(),
+      limit: MAX_BUFFER
+    });
+    if (!res || !res.ok) return;
+
+    var text = await res.text();
+    var json = JSON.parse(text || "{}");
+    var rows = (json && json.messages) ? json.messages : [];
+
+    // 방이 바뀐 뒤/새 요청이 시작된 뒤 늦게 온 응답은 무시(대화 섞임 방지)
+    if (seq !== __loadSeq) return;
+    if (currentRoomId !== wantedRoomId) return;
+
+    // 시트 목록 파싱
+    var sheetList = [];
+    (rows || []).forEach(function (row) {
+      if (!row) return;
+      var rawMsg = (row.text || row.chatlog || row.message || row.msg || "").toString();
+      var mid = row.mid || row.message_id || row.id || "";
+      var m = {
+        key: mid ? ("m_" + mid) : ("s_" + (row.ts || row.timestamp || row.date || Date.now()) + "_" + Math.random().toString(16).slice(2)),
+        mid: mid || "",
+        user_id: row.user_id || "",
+        nickname: row.nickname || "익명",
+        text: rawMsg,
+        ts: row.ts || row.timestamp || row.date || Date.now(),
+        room_id: wantedRoomId,
+        _sheet: true
+      };
+
+      // 토큰 기반 타입 복원([[IMG]] / [[FILE]])
       try {
-        postToSheet({ mode: "social_send", room_id: currentRoomId, nickname: me, message: "[이모티콘]", ts: msgData.ts }).catch(function () {});
-      } catch (e) {}
+        if (rawMsg.indexOf("[[IMG]]") === 0) {
+          m.type = "image";
+          m.image_url = rawMsg.replace("[[IMG]]", "").trim();
+          m.text = "";
+        } else if (rawMsg.indexOf("[[FILE]]") === 0) {
+          var pf = parseFileToken(rawMsg);
+          if (pf) {
+            m.type = "file";
+            m.file_url = pf.url;
+            m.file_name = pf.name;
+            m.text = "";
+          } else {
+            m.type = "text";
+          }
+        } else {
+          m.type = "text";
+        }
+      } catch (e0) {
+        m.type = "text";
+      }
+
+      sheetList.push(m);
+    });
+
+    // merge: 기존(릴레이 포함)을 덮어쓰지 않고 합치기 (mid 우선)
+    var __relayIdx = __smBuildRelayMidIndex(messages);
+    sheetList.forEach(function(m){ __smTryAttachMidFromRelayIndex(m, __relayIdx); });
+
+    var map = {};
+    function keyOf(m) {
+      var mid2 = (m && m.mid) ? String(m.mid) : "";
+      if (mid2) return "m:" + mid2;
+      return "k:" + String(m.user_id || "") + "|" + String(m.nickname || "") + "|" + String(m.text || "") + "|" + String(m.ts || 0);
     }
+
+    (messages || []).forEach(function (m) {
+      if (!m) return;
+      map[keyOf(m)] = m;
+    });
+
+    sheetList.forEach(function (m) {
+      if (!m) return;
+      map[keyOf(m)] = m; // 시트가 정답 우선
+      // 디듀프 힌트
+      try { if (m.mid) __rememberRelay(m.mid); } catch (eD) {}
+    });
+
+    var merged = Object.keys(map).map(function (k) { return map[k]; });
+    merged.sort(function (a, b) { return Number(a.ts || 0) - Number(b.ts || 0); });
+
+    if (merged.length > MAX_BUFFER) {
+      merged = merged.slice(merged.length - MAX_BUFFER);
+    }
+
+    messages = merged;
+    renderAll();
+  } catch (e) {
+    console.warn("[messenger] 최근 메시지 불러오기 실패:", e);
+  }
+}
+
+
+
+  // signals 수신에 따라 현재 방의 최근글(30개)만 '짧게' 갱신 (속도/혼선 방지)
+  var __roomRefreshTimer = null;
+  
+
+function isVisitedRoomForNotify(roomId) {
+  try {
+    if (!roomId) return false;
+    if (String(roomId) === "global") return true;
+    var raw = localStorage.getItem("ghostRoomVisited_v1");
+    if (!raw) return false;
+    var map = JSON.parse(raw) || {};
+    return !!map[String(roomId)];
+  } catch (e) {
+    return false;
+  }
+}
+
+// ------------------------------------------------------------
+// (B안) Firebase를 "저장소"가 아니라 "중계"로만 사용해 실시간 속도 확보
+// - SignalBus(/signals/<room>/q)의 onMessage를 받아 현재 방 UI에 즉시 반영합니다.
+// - 중복/에코 방지용 mid(메시지 ID) 기반 디듀프를 포함합니다.
+// ------------------------------------------------------------
+var __relaySeen = {};
+var __relaySeenOrder = [];
+var __RELAY_SEEN_MAX = 240;
+
+function __rememberRelay(mid) {
+  try {
+    if (!mid) return;
+    mid = String(mid);
+    if (__relaySeen[mid]) return;
+    __relaySeen[mid] = 1;
+    __relaySeenOrder.push(mid);
+    if (__relaySeenOrder.length > __RELAY_SEEN_MAX) {
+      var old = __relaySeenOrder.splice(0, __relaySeenOrder.length - __RELAY_SEEN_MAX);
+      old.forEach(function (k) { delete __relaySeen[k]; });
+    }
+  } catch (e) {}
+}
+
+function __hasRelay(mid) {
+  try { return !!(__relaySeen && mid && __relaySeen[String(mid)]); } catch (e) { return false; }
+}
+
+function __removeByMid(mid) {
+  try {
+    if (!mid) return false;
+    mid = String(mid);
+    var removed = false;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var it = messages[i];
+      if (!it) continue;
+      if (String(it.mid || it.key || "") === mid) {
+        messages.splice(i, 1);
+        removed = true;
+      }
+    }
+    if (removed) renderAll();
+    return removed;
+  } catch (e) { return false; }
+}
+
+function __toMessageFromRelay(msgInfo) {
+  var txt = (msgInfo && msgInfo.text != null) ? String(msgInfo.text) : "";
+  var m = {
+    key: (msgInfo.mid || ("relay_" + (msgInfo.ts || Date.now()))),
+    mid: msgInfo.mid || "",
+    user_id: msgInfo.user_id || "",
+    nickname: msgInfo.nickname || "익명",
+    text: txt,
+    ts: msgInfo.ts || Date.now(),
+    room_id: msgInfo.roomId || currentRoomId || "",
+    _relay: true
   };
 
-  window.sendChatPhoto = function (url, originalUrl) {
-    if (!currentRoomId) return;
-    var me = myNickname();
-    var msgData = {
-      user_id:  (window.currentUser && window.currentUser.user_id) || "",
-      nickname: me,
-      text:     "",
-      ts:       Date.now(),
-      type:     "photo",
-      url:      url
-    };
-    if (window.FirebaseMessages) {
-      window.FirebaseMessages.saveMessage(currentRoomId, msgData).catch(function () {});
+  // 토큰 기반 타입 복원([[IMG]] / [[FILE]])
+  try {
+    if (txt.indexOf("[[IMG]]") === 0) {
+      m.type = "image";
+      m.image_url = txt.replace("[[IMG]]", "").trim();
+      m.text = "";
+    } else if (txt.indexOf("[[FILE]]") === 0) {
+      var pf = (typeof parseFileToken === "function") ? parseFileToken(txt) : null;
+      if (pf) {
+        m.type = "file";
+        m.file_url = pf.url;
+        m.file_name = pf.name;
+        m.text = "";
+      } else {
+        m.type = "text";
+      }
+    } else {
+      m.type = "text";
     }
-    if (typeof postToSheet === "function") {
+  } catch (e2) {
+    m.type = "text";
+  }
+
+  return m;
+}
+
+function __applyRelayMessage(msgInfo) {
+  try {
+    if (!msgInfo || !msgInfo.roomId) return;
+    if (!currentRoomId) return;
+    if (String(msgInfo.roomId) !== String(currentRoomId)) return;
+
+    // retract(전송 실패/취소) 처리
+    if (String(msgInfo.kind || "") === "retract") {
+      __removeByMid(msgInfo.mid || "");
+      return;
+    }
+
+    var mid = msgInfo.mid || "";
+    if (mid && __hasRelay(mid)) return;
+    if (mid) __rememberRelay(mid);
+
+    var m = __toMessageFromRelay(msgInfo);
+
+    // 현재 방에서 보고 있을 때는 lastSeenTs 갱신(알림 오탐 방지)
+    try {
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId || "", m.ts || Date.now());
+      }
+    } catch (eSeen) {}
+
+    messages.push(m);
+    if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
+    renderAll();
+  } catch (e) {}
+}
+
+function scheduleRoomRefresh(roomId) {
+    try {
+      if (!roomId) return;
+      if (!currentRoomId) return;
+      if (String(roomId) !== String(currentRoomId)) return;
+
+      clearTimeout(__roomRefreshTimer);
+      __roomRefreshTimer = setTimeout(function () {
+        try { loadRecentFromSheet(roomId); } catch (e) {}
+      }, 200);
+    } catch (e0) {}
+  }
+
+  function startListen() {
+    var db0 = ensureFirebase();
+    if (!db0 || !ref) return;
+
+    // auth 보장 후 리스너 시작
+    ensureAnonAuth().then(function () {
+      var roomIdNow = currentRoomId;
+      var refNow = ref;
+
+      // 리스너 중복 방지
+      stopListen();
+      listenStartedAt = Date.now();
+
+      var onChildAdded = function (snap) {
+        // 방이 바뀐 뒤 늦게 도착한 이벤트는 무시
+        if (currentRoomId !== roomIdNow) return;
+        var arrivedAt = Date.now();
+        var val = snap.val() || {};
+        // 과거 데이터 호환:
+        // - 일부 클라이언트는 text 대신 message/chatlog/msg 키를 사용했을 수 있음
+        var msgText = (val.text || val.message || val.chatlog || val.msg || "");
+
+        var msg = {
+          key: snap.key,
+          user_id: val.user_id || "",
+          nickname: val.nickname || "익명",
+          text: msgText,
+          type: val.type || "text",
+          image_url: val.image_url || "",
+          file_url: val.file_url || "",
+          file_name: val.file_name || "",
+          file_mime: val.file_mime || "",
+          file_size: val.file_size || 0,
+          ts: val.ts || Date.now(),
+          room_id: val.room_id || roomIdNow
+        };
+
+        // text에 [[IMG]]가 있으면 보정
+        if ((!msg.type || msg.type === "text") && msg.text && msg.text.indexOf("[[IMG]]") === 0) {
+          msg.type = "image";
+          msg.image_url = msg.text.replace("[[IMG]]", "").trim();
+          msg.text = "";
+        }
+        // text에 [[FILE]]가 있으면 보정
+        if ((!msg.type || msg.type === "text") && msg.text && msg.text.indexOf("[[FILE]]") === 0) {
+          var pf2 = parseFileToken(msg.text);
+          if (pf2) {
+            msg.type = "file";
+            msg.file_url = pf2.url;
+            msg.file_name = pf2.name;
+            msg.text = "";
+          }
+        }
+
+        // 다른 방 메시지가 섞이는 것을 방지(메시지에 room_id가 들어있는 경우)
+        try {
+          if (msg.room_id && String(msg.room_id) !== String(roomIdNow)) return;
+        } catch (eRoom) {}
+
+        // 낙관적 렌더(로컬) 메시지/중복 제거
+        try {
+          for (var di = messages.length - 1; di >= 0; di--) {
+            var mm = messages[di];
+            if (!mm) continue;
+            if (mm.key && msg.key && mm.key === msg.key) return;
+            var same = (mm.ts === msg.ts) && (String(mm.user_id || "") === String(msg.user_id || "")) && (String(mm.type || "text") === String(msg.type || "text")) &&
+              (String(mm.text || "") === String(msg.text || "")) && (String(mm.image_url || "") === String(msg.image_url || "")) && (String(mm.file_url || "") === String(msg.file_url || ""));
+            if (same) {
+              if (mm._local) { messages.splice(di, 1); }
+              else { return; }
+              break;
+            }
+          }
+        } catch (eDup) {}
+
+        // 방에 들어와 있는 동안은 "봤음"으로 계속 갱신(알림 오탐 방지)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+            window.SignalBus.markSeenTs(roomIdNow, msg.ts);
+          }
+        } catch (e0) {}
+
+        // 내 메시지면 lastMyTs 갱신(다른 기기에서 보낸 경우 포함)
+        try {
+          if (myId && msg.user_id && String(msg.user_id) === String(myId)) {
+            if (window.SignalBus && typeof window.SignalBus.markMyTs === "function") {
+              window.SignalBus.markMyTs(roomIdNow, msg.ts);
+            }
+          }
+        } catch (e1) {}
+
+        // (기존 알림음) 내 글 직후 다른 사람이 메시지를 보내면 띠리링(현재 방 내부)
+        var prev = messages.length ? messages[messages.length - 1] : null;
+        var shouldRing = false;
+        if (myId && prev && prev.user_id === myId && msg.user_id && msg.user_id !== myId) {
+          if (arrivedAt - listenStartedAt > 1500) shouldRing = true;
+        }
+
+        messages.push(msg);
+        if (messages.length > MAX_BUFFER) {
+          messages.splice(0, messages.length - MAX_BUFFER);
+        }
+        renderAll();
+
+        if (shouldRing && NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
+          NotifySound.playDdiring();
+          if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg);
+        }
+        try { snap.ref.remove(); } catch (e) {}
+      };
+
+      // Query(limitToLast) 리스너는 같은 Query 객체에서 off 해야 함
+      // → 전용 스트림 모듈(RoomMessageStream)로 attach/stop 관리
+      if (window.RoomMessageStream && typeof window.RoomMessageStream.start === "function") {
+        window.RoomMessageStream.start(refNow, MAX_BUFFER, onChildAdded);
+      } else {
+        // fallback (권장되지 않음)
+        try { refNow.limitToLast(MAX_BUFFER).on("child_added", onChildAdded); } catch (e0) {}
+      }
+
+      showStatus("실시간 연결 완료");
+    }).catch(function () {
+      showStatus("실시간 서버 인증에 실패했어요.");
+    });
+  }
+
+  function logToSheet(text, ts) {
+    if (typeof window.postToSheet !== "function") return;
+    try {
+      var payload = {
+        mode: "social_chat_room",
+        room_id: currentRoomId || "",
+        user_id: myId || "",
+        nickname: getSafeNickname(),
+        message: text,
+        text: text,
+        ts: ts || Date.now()
+      };
+      // 구버전 서버(rooms 미지원) 대비: global이면 기존 mode도 함께 기록 시도
+      if (!currentRoomId) {
+        try {
+          window.postToSheet({
+            mode: "social_chat",
+            user_id: myId || "",
+            nickname: getSafeNickname(),
+            message: text,
+            text: text,
+            ts: ts || Date.now()
+          });
+        } catch (e0) {}
+      }
+
+      var p = window.postToSheet(payload);
+      if (p && typeof p.catch === "function") {
+        p.catch(function (e) {
+          console.warn("[messenger] 시트 기록 실패:", e);
+        });
+      }
+    } catch (e) {
+      console.warn("[messenger] logToSheet 예외:", e);
+    }
+  }
+
+    function sendTextMessage(text) {
+    var clean = (text || "").trim();
+    if (!clean) {
+      showStatus("보낼 내용을 입력해 주세요.");
+      return;
+    }
+    if (!requireLogin()) return;
+
+    if (!currentRoomId) {
+      showStatus("상단 왼쪽 '대화방' 버튼을 눌러 방을 선택해 주세요.");
       try {
-        postToSheet({ mode: "social_send", room_id: currentRoomId, nickname: me, message: "[사진]", ts: msgData.ts }).catch(function () {});
-      } catch (e) {}
+        if (window.RoomGuard && typeof window.RoomGuard.renderNoRoomHint === "function") {
+          window.RoomGuard.renderNoRoomHint(bodyEl);
+        }
+      } catch (e0) {}
+      return;
     }
-  };
 
-  window.sendChatFile = function (url, fileName) {
-    if (!currentRoomId) return;
-    var me = myNickname();
-    var msgData = {
-      user_id:  (window.currentUser && window.currentUser.user_id) || "",
-      nickname: me,
-      text:     "",
-      ts:       Date.now(),
-      type:     "file",
-      url:      url,
-      fileName: fileName || "파일"
+    var now = Date.now();
+
+    // 즉시 화면에 반영(낙관적 렌더)
+    var __mid = "m_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_" + __mid;
+    var __localMsg = {
+      key: __localKey,
+      mid: __mid,
+      user_id: myId || "",
+      nickname: getSafeNickname(),
+      text: clean,
+      type: "text",
+      ts: now,
+      room_id: currentRoomId || "",
+      _local: true
     };
-    if (window.FirebaseMessages) {
-      window.FirebaseMessages.saveMessage(currentRoomId, msgData).catch(function () {});
+
+    try {
+      messages.push(__localMsg);
+      if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
+      renderAll();
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId || "", now);
+      }
+      if (window.SignalBus && typeof window.SignalBus.markMyTs === "function") {
+        window.SignalBus.markMyTs(currentRoomId || "", now);
+      }
+    } catch (e0) {}
+
+    // (B안) Firebase signals 큐로 즉시 중계(시트 저장과는 별개)
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: clean,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
+    // Firebase Realtime DB 에 메시지 저장 (빠른 실시간 로딩용)
+    try {
+      var __fbPath = getFirebasePath(currentRoomId);
+      var __fbDb = ensureFirebase();
+      if (__fbDb && __fbPath) {
+        __fbDb.ref(__fbPath).push({
+          mid:      __mid,
+          user_id:  myId || "",
+          nickname: getSafeNickname(),
+          text:     clean,
+          type:     "text",
+          ts:       now,
+          room_id:  currentRoomId || ""
+        }).catch(function (e) {
+          console.warn("[messenger] Firebase 텍스트 저장 실패:", e.message || e);
+        });
+        // 30일 이전 메시지 청소 (가끔)
+        __pruneOldFirebaseMessages(currentRoomId);
+      }
+    } catch (eFbSave) {}
+
+    // 1) 시트에 기록 (백업 저장소)
+    try {
+      if (typeof window.postToSheet !== "function") throw new Error("postToSheet missing");
+
+      window.postToSheet({
+        mode: "social_chat_room",
+        room_id: currentRoomId || "",
+        mid: __mid,
+        user_id: myId || "",
+        nickname: getSafeNickname(),
+        message: clean,
+        text: clean,
+        ts: now
+      }).then(function (res) {
+        if (!res || !res.ok) throw new Error("sheet write failed");
+
+        // 성공 토스트(보냈어요!)는 표시하지 않음
+
+        // (선택) 시트 기반으로 1회 정렬/동기화(필요 시)
+        scheduleRoomRefresh(currentRoomId || "");
+      }).catch(function (err) {
+        console.warn("[messenger] 시트 전송 실패:", err);
+        showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
+
+        // 낙관적 렌더 롤백
+        try {
+          for (var i = messages.length - 1; i >= 0; i--) {
+            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
+          }
+          renderAll();
+        } catch (e0) {}
+      });
+    } catch (e) {
+      console.warn("[messenger] 전송 예외:", e);
+      showStatus("전송 중 문제가 생겼어요.");
     }
-  };
-
-  /* ===== 상태 토스트 ===== */
-  function showStatus(msg, ms) {
-    var el = document.getElementById("msgStatus");
-    if (!el) return;
-    el.textContent = msg;
-    el.classList.add("show");
-    clearTimeout(el._t);
-    el._t = setTimeout(function () { el.classList.remove("show"); }, ms || 1800);
-  }
-  window.showBubble = showStatus;
-
-  /* ===== 이미지 줌 닫기 ===== */
-  function initZoomOverlay() {
-    var overlay = document.getElementById("imageZoomOverlay");
-    if (!overlay) return;
-    overlay.addEventListener("click", function (e) {
-      var link = document.getElementById("imageZoomOpenLink");
-      if (link && (e.target === link || link.contains(e.target))) return;
-      overlay.classList.remove("open");
-      try { document.body.classList.remove("no-scroll"); } catch (e2) {}
-    });
   }
 
-  /* ===== 전송 버튼/엔터 ===== */
-  function initSendControls() {
-    var sendBtn = document.getElementById("msgSendBtn");
-    var input   = document.getElementById("msgInput");
-    if (sendBtn) sendBtn.addEventListener("click", sendMessage);
-    if (input)   input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-    });
+  function sendCurrentMessage() {
+    if (!msgInput) return;
+    var text = (msgInput.value || "").trim();
+    if (!text) {
+      showStatus("보낼 내용을 입력해 주세요.");
+      return;
+    }
+    // 입력창은 미리 비우고 전송(키 입력 반복 방지)
+    msgInput.value = "";
+    sendTextMessage(text);
   }
 
-  /* ===== 첨부 메뉴 (+ 버튼) ===== */
-  function initAttachMenu() {
-    var cameraBtn = document.getElementById("msgCameraBtn");
-    if (!cameraBtn) return;
+  function buildEmojiPanel() {
+    emojiBtn = document.getElementById("msgEmojiBtn");
+    emojiPanel = document.getElementById("msgEmojiPanel");
+    if (!emojiBtn || !emojiPanel || !msgInput) return;
 
-    // 첨부 메뉴 DOM
-    var menu = document.createElement("div");
-    menu.className = "msg-attach-menu";
-    menu.innerHTML = [
-      '<button class="msg-attach-item" id="attachCamera">📷 사진촬영</button>',
-      '<button class="msg-attach-item" id="attachImage">🖼 이미지 첨부</button>',
-      '<button class="msg-attach-item" id="attachFile">📎 파일 첨부</button>'
-    ].join("");
-
-    var inputBar = document.querySelector(".messenger-input-bar");
-    if (inputBar) inputBar.appendChild(menu);
-
-    cameraBtn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      menu.classList.toggle("open");
-    });
-    document.addEventListener("click", function () { menu.classList.remove("open"); });
-
-    var attachCamera = document.getElementById("attachCamera");
-    var attachImage  = document.getElementById("attachImage");
-    var attachFile   = document.getElementById("attachFile");
-
-    if (attachCamera) attachCamera.addEventListener("click", function () {
-      menu.classList.remove("open");
-      if (window.ChatPhoto) window.ChatPhoto.openCamera();
-    });
-    if (attachImage) attachImage.addEventListener("click", function () {
-      menu.classList.remove("open");
-      if (window.ChatPhoto) window.ChatPhoto.openGallery();
-    });
-    if (attachFile) attachFile.addEventListener("click", function () {
-      menu.classList.remove("open");
-      if (window.ChatFile) window.ChatFile.open();
-    });
-  }
-
-  /* ===== 이모지 패널 ===== */
-  function initEmojiPanel() {
-    var emojiBtn   = document.getElementById("msgEmojiBtn");
-    var emojiPanel = document.getElementById("msgEmojiPanel");
-    if (!emojiBtn || !emojiPanel) return;
-
-    // 패널 그리드 구성 (아직 안 만들어진 경우)
-    if (!emojiPanel.dataset.__built) {
-      emojiPanel.dataset.__built = "1";
-      var basePath = window.CHAT_EMOJI_BASE_PATH || "../images/emoticon/";
+    if (!emojiPanel.dataset.built) {
+      emojiPanel.dataset.built = "1";
       var grid = document.createElement("div");
       grid.className = "emoji-grid";
       for (var i = 1; i <= 12; i++) {
-        (function (idx) {
-          var btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "emoji-item";
-          btn.setAttribute("data-emoji-idx", idx);
-          var img = document.createElement("img");
-          img.className = "chat-emoji";
-          img.src = basePath + "e" + idx + ".png";
-          img.alt = "이모티콘" + idx;
-          img.width = 72; img.height = 72;
-          btn.appendChild(img);
-          grid.appendChild(btn);
-        })(i);
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "emoji-item";
+        btn.setAttribute("data-code", "e" + i);
+
+        var img = document.createElement("img");
+        img.className = "chat-emoji";
+        img.src = "../images/emoticon/e" + i + ".png";
+        img.alt = ":e" + i + ":";
+        btn.appendChild(img);
+        grid.appendChild(btn);
       }
       emojiPanel.appendChild(grid);
     }
 
+    function closePanel() {
+      emojiPanel.classList.remove("open");
+    }
+
     emojiBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      emojiPanel.classList.toggle("open");
-    });
-    document.addEventListener("click", function () {
-      emojiPanel.classList.remove("open");
+      if (emojiPanel.classList.contains("open")) {
+        emojiPanel.classList.remove("open");
+      } else {
+        emojiPanel.classList.add("open");
+      }
     });
 
     emojiPanel.addEventListener("click", function (e) {
       var btn = e.target.closest(".emoji-item");
       if (!btn) return;
-      var idx = btn.getAttribute("data-emoji-idx");
-      if (!idx) return;
-      var basePath2 = window.CHAT_EMOJI_BASE_PATH || "../images/emoticon/";
-      var url = basePath2 + "e" + idx + ".png";
-      // Firebase로 이모티콘 전송
-      if (typeof window.sendChatEmoji === "function") {
-        window.sendChatEmoji(url);
+      var code = btn.getAttribute("data-code");
+      if (!code) return;
+      var token = ":" + code + ":";
+
+      // 방 선택 전에는 전송 불가
+      if (!currentRoomId) {
+        showStatus("상단 왼쪽 '대화방' 버튼을 눌러 방을 선택해 주세요.");
+        try {
+          if (window.RoomGuard && typeof window.RoomGuard.renderNoRoomHint === "function") {
+            window.RoomGuard.renderNoRoomHint(bodyEl);
+          }
+        } catch (e0) {}
+        closePanel();
+        return;
       }
+
+      // [요청사항] 실시간 톡 보기에서는 이모티콘을 고르면 즉시 전송
+      sendTextMessage(token);
+      try { msgInput.focus(); } catch (e2) {}
+      closePanel();
+    });
+
+    document.addEventListener("click", function (e) {
+      if (!emojiPanel.classList.contains("open")) return;
+      if (e.target === emojiBtn || emojiBtn.contains(e.target)) return;
+      if (emojiPanel.contains(e.target)) return;
       emojiPanel.classList.remove("open");
     });
   }
 
-  /* ===== 초기화 ===== */
-  function init() {
-    ensureDb();
+  function attachEvents() {
+    if (!sendBtn || !msgInput) return;
+    sendBtn.addEventListener("click", function () {
+      sendCurrentMessage();
+    });
+    msgInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        sendCurrentMessage();
+      }
+    });
 
-    initSendControls();
-    initAttachMenu();
-    initEmojiPanel();
-    initZoomOverlay();
-
-    // 대화방 초기화
-    if (window.ChatRooms) {
-      window.ChatRooms.init().then(function () {
-        var rid = window.ChatRooms.getActiveRoomId();
-        if (rid) window.__onRoomChanged(rid, window.ChatRooms.getActiveRoom());
+    closeBtn = document.getElementById("topCloseBtn");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function () {
+        try {
+          if (window.parent && typeof window.parent.exitGame === "function") {
+            window.parent.exitGame();
+          } else {
+            window.close();
+          }
+        } catch (e) {
+          window.close();
+        }
       });
     }
 
-    // 프로필 초기화 (기어 버튼 등)
-    if (window.ProfileManager) {
-      // 이미 init은 profile-manager.js 에서 자동 호출됨
+    buildEmojiPanel();
+
+    // + 첨부 메뉴(사진촬영/이미지/파일)
+    cameraBtn = document.getElementById("msgCameraBtn");
+    if (cameraBtn && AttachMenu && typeof AttachMenu.init === "function") {
+      AttachMenu.init({
+          buttonEl: cameraBtn,
+          containerEl: cameraBtn.parentElement,
+          onTakePhoto: async function () {
+            if (!requireLogin()) return;
+            if (!window.ChatPhoto || typeof window.ChatPhoto.pickAndUpload !== "function") {
+              showStatus("사진 기능이 준비되지 않았어요.");
+              return;
+            }
+            try {
+              showStatus("사진 촬영 준비 중...");
+              var result = await window.ChatPhoto.pickAndUpload({
+                capture: true,
+                size: 480,
+                quality: 0.78,
+                user_id: myId || "",
+                nickname: getSafeNickname()
+              });
+              if (!result || !result.url) {
+                showStatus("사진 업로드에 실패했어요.");
+                return;
+              }
+              sendImageMessage(result.url);
+            } catch (e) {
+              console.warn("[messenger] take photo error:", e);
+              showStatus("사진 전송에 실패했어요.");
+            }
+          },
+                    onScanQr: async function () {
+            if (!requireLogin()) return;
+            if (!window.QRLinkScanner || typeof window.QRLinkScanner.start !== "function") {
+              showStatus("QR 스캔 기능이 준비되지 않았어요.");
+              return;
+            }
+            try {
+              window.QRLinkScanner.start({
+                onResult: function (val) {
+                  try {
+                    if (!val) return;
+                    sendTextMessage(String(val));
+                  } catch (e) {}
+                }
+              });
+            } catch (e) {
+              showStatus("QR 스캔을 시작할 수 없어요.");
+            }
+          },
+onPickImage: async function () {
+            if (!requireLogin()) return;
+            if (!window.ChatPhoto || typeof window.ChatPhoto.pickAndUpload !== "function") {
+              showStatus("이미지 기능이 준비되지 않았어요.");
+              return;
+            }
+            try {
+              showStatus("이미지 준비 중...");
+              var result2 = await window.ChatPhoto.pickAndUpload({
+                capture: false,
+                size: 480,
+                quality: 0.78,
+                user_id: myId || "",
+                nickname: getSafeNickname()
+              });
+              if (!result2 || !result2.url) {
+                showStatus("이미지 업로드에 실패했어요.");
+                return;
+              }
+              sendImageMessage(result2.url);
+            } catch (e2) {
+              console.warn("[messenger] pick image error:", e2);
+              showStatus("이미지 전송에 실패했어요.");
+            }
+          },
+          onPickFile: async function () {
+            if (!requireLogin()) return;
+            if (!window.ChatFile || typeof window.ChatFile.pickAndUpload !== "function") {
+              showStatus("파일 기능이 준비되지 않았어요.");
+              return;
+            }
+            try {
+              showStatus("파일 준비 중...");
+              var fr = await window.ChatFile.pickAndUpload({
+                maxBytes: 5 * 1024 * 1024,
+                user_id: myId || "",
+                nickname: getSafeNickname()
+              });
+              if (!fr || !fr.url) {
+                showStatus("파일 업로드에 실패했어요.");
+                return;
+              }
+              sendFileMessage(fr.url, fr.filename, fr.mime, fr.size);
+            } catch (e3) {
+              console.warn("[messenger] file error:", e3);
+              if (String(e3 && e3.message || "").indexOf("file too large") >= 0) {
+                showStatus("파일은 5MB를 넘길 수 없어요.");
+              } else {
+                showStatus("파일 전송에 실패했어요.");
+              }
+            }
+          },
+          getNotifyLabel: function () { return NotifySetting.getMenuLabel(); },
+          onToggleNotify: function () { NotifySetting.toggle(showStatus); },
+          onLogout: function () {
+            // iframe 내부 → 부모(index.html)로 로그아웃 요청
+            try {
+              // 1) 같은 출처라면 부모 전역 함수 직접 호출
+              if (window.parent && typeof window.parent.logoutGhostUser === "function") {
+                window.parent.logoutGhostUser();
+              }
+              if (window.parent && typeof window.parent.openLoginPanel === "function") {
+                // 로그아웃 후 바로 로그인창 띄우기
+                window.parent.openLoginPanel();
+              }
+            } catch (e) {}
+
+            // 2) postMessage fallback (file:// 등 환경)
+            try {
+              if (window.parent && window.parent.postMessage) {
+                window.parent.postMessage({ type: "WG_LOGOUT" }, "*");
+              }
+            } catch (e2) {}
+
+            // 3) 현재 iframe 상태도 즉시 잠그기
+            try {
+              localStorage.removeItem("ghostUser");
+            } catch (e3) {}
+            myId = null;
+            myNickname = null;
+            showStatus("로그아웃 되었어요.");
+          }
+        });
+    }
+  }
+
+    function sendImageMessage(imageUrl) {
+    if (!imageUrl) return;
+    if (!requireLogin()) return;
+
+    if (!currentRoomId) {
+      showStatus("상단 왼쪽 '대화방' 버튼을 눌러 방을 선택해 주세요.");
+      return;
     }
 
-    // unread badge 연동
-    if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.init === "function") {
-      try { window.RoomUnreadBadge.init(); } catch (e) {}
+    var now = Date.now();
+    var token = "[[IMG]]" + imageUrl;
+
+    // 낙관적 렌더
+    var __mid = "mimg_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_img_" + __mid;
+    var __localMsg = {
+      key: __localKey,
+      mid: __mid,
+      user_id: myId || "",
+      nickname: getSafeNickname(),
+      type: "image",
+      image_url: imageUrl,
+      text: "",
+      ts: now,
+      room_id: currentRoomId || "",
+      _local: true
+    };
+
+    try {
+      messages.push(__localMsg);
+      if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
+      renderAll();
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId || "", now);
+      }
+      if (window.SignalBus && typeof window.SignalBus.markMyTs === "function") {
+        window.SignalBus.markMyTs(currentRoomId || "", now);
+      }
+    } catch (e0) {}
+
+    // (B안) Firebase signals 큐로 즉시 중계
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: token,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
+    // Firebase 이미지 메시지 저장
+    try {
+      var __fbPathImg = getFirebasePath(currentRoomId);
+      var __fbDbImg = ensureFirebase();
+      if (__fbDbImg && __fbPathImg) {
+        __fbDbImg.ref(__fbPathImg).push({
+          mid: __mid, user_id: myId || "", nickname: getSafeNickname(),
+          text: "", type: "image", url: imageUrl, image_url: imageUrl,
+          ts: now, room_id: currentRoomId || ""
+        }).catch(function (e) {
+          console.warn("[messenger] Firebase 이미지 저장 실패:", e.message || e);
+        });
+      }
+    } catch (eFbImg) {}
+
+    try {
+      if (typeof window.postToSheet !== "function") throw new Error("postToSheet missing");
+
+      window.postToSheet({
+        mode: "social_chat_room",
+        room_id: currentRoomId || "",
+        mid: __mid,
+        user_id: myId || "",
+        nickname: getSafeNickname(),
+        message: token,
+        text: token,
+        ts: now
+      }).then(function (res) {
+        if (!res || !res.ok) throw new Error("sheet write failed");
+
+        // 성공 토스트(사진을 보냈어요!)는 표시하지 않음
+
+        scheduleRoomRefresh(currentRoomId || "");
+      }).catch(function (err) {
+        console.warn("[messenger] 이미지 시트 전송 실패:", err);
+        showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
+
+        try {
+          for (var i = messages.length - 1; i >= 0; i--) {
+            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
+          }
+          renderAll();
+        } catch (e0) {}
+      });
+    } catch (e) {
+      console.warn("[messenger] 이미지 전송 예외:", e);
+      showStatus("전송 중 문제가 생겼어요.");
     }
+  }
+
+    function sendFileMessage(fileUrl, fileName, fileMime, fileSize) {
+    if (!fileUrl) return;
+    if (!requireLogin()) return;
+
+    if (!currentRoomId) {
+      showStatus("상단 왼쪽 '대화방' 버튼을 눌러 방을 선택해 주세요.");
+      return;
+    }
+
+    var now = Date.now();
+
+    var safeName = "";
+    try { safeName = encodeURIComponent(String(fileName || "파일")); } catch (e2) { safeName = String(fileName || "파일"); }
+    var token = "[[FILE]]" + fileUrl + "|" + safeName;
+
+    // 낙관적 렌더
+    var __mid = "mfile_" + now + "_" + Math.random().toString(16).slice(2);
+    var __localKey = "local_file_" + __mid;
+    var __localMsg = {
+      key: __localKey,
+      mid: __mid,
+      user_id: myId || "",
+      nickname: getSafeNickname(),
+      type: "file",
+      file_url: fileUrl,
+      file_name: fileName || "파일",
+      file_mime: fileMime || "application/octet-stream",
+      file_size: fileSize || 0,
+      text: "",
+      ts: now,
+      room_id: currentRoomId || "",
+      _local: true
+    };
+
+    try {
+      messages.push(__localMsg);
+      if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
+      renderAll();
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId || "", now);
+      }
+      if (window.SignalBus && typeof window.SignalBus.markMyTs === "function") {
+        window.SignalBus.markMyTs(currentRoomId || "", now);
+      }
+    } catch (e0) {}
+
+    // (B안) Firebase signals 큐로 즉시 중계
+    try {
+      __rememberRelay(__mid);
+      if (window.SignalBus && typeof window.SignalBus.push === "function") {
+        window.SignalBus.push(currentRoomId || "", {
+          kind: "chat",
+          mid: __mid,
+          room_id: currentRoomId || "",
+          user_id: myId || "",
+          nickname: getSafeNickname(),
+          text: token,
+          ts: now
+        });
+      }
+    } catch (eRelay) {}
+
+    // Firebase 파일 메시지 저장
+    try {
+      var __fbPathFile = getFirebasePath(currentRoomId);
+      var __fbDbFile = ensureFirebase();
+      if (__fbDbFile && __fbPathFile) {
+        __fbDbFile.ref(__fbPathFile).push({
+          mid: __mid, user_id: myId || "", nickname: getSafeNickname(),
+          text: "", type: "file", url: fileUrl, file_url: fileUrl,
+          fileName: fileName || "", file_name: fileName || "",
+          ts: now, room_id: currentRoomId || ""
+        }).catch(function (e) {
+          console.warn("[messenger] Firebase 파일 저장 실패:", e.message || e);
+        });
+      }
+    } catch (eFbFile) {}
+
+    try {
+      if (typeof window.postToSheet !== "function") throw new Error("postToSheet missing");
+
+      window.postToSheet({
+        mode: "social_chat_room",
+        room_id: currentRoomId || "",
+        mid: __mid,
+        user_id: myId || "",
+        nickname: getSafeNickname(),
+        message: token,
+        text: token,
+        ts: now
+      }).then(function (res) {
+        if (!res || !res.ok) throw new Error("sheet write failed");
+
+        // 성공 토스트(파일을 보냈어요!)는 표시하지 않음
+
+        scheduleRoomRefresh(currentRoomId || "");
+      }).catch(function (err) {
+        console.warn("[messenger] 파일 시트 전송 실패:", err);
+        showStatus("전송 중 문제가 생겼어요.");
+
+        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
+        try {
+          if (window.SignalBus && typeof window.SignalBus.push === "function") {
+            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
+          }
+        } catch (eR) {}
+
+        try {
+          for (var i = messages.length - 1; i >= 0; i--) {
+            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
+          }
+          renderAll();
+        } catch (e0) {}
+      });
+    } catch (e) {
+      console.warn("[messenger] 파일 전송 예외:", e);
+      showStatus("전송 중 문제가 생겼어요.");
+    }
+  }
+
+
+  function clearChatView() {
+    try {
+      if (bodyEl) bodyEl.innerHTML = "";
+    } catch (e) {}
+    messages = [];
+    lastKey = null;
+  }
+
+  function switchRoom(roomId, meta) {
+    roomId = (roomId === undefined || roomId === null) ? "" : String(roomId);
+    roomId = roomId.trim();
+
+    currentRoomId = roomId || null;
+    currentRoomMeta = meta || null;
+
+    // 방이 선택되지 않았으면: 리스너/뷰 초기화만
+    if (!currentRoomId) {
+      stopListen();
+      clearChatView();
+      showStatus("상단 왼쪽 '대화방' 버튼을 눌러 방을 선택해 주세요.");
+      try {
+        if (window.RoomGuard && typeof window.RoomGuard.renderNoRoomHint === "function") {
+          window.RoomGuard.renderNoRoomHint(bodyEl);
+        }
+      } catch (eHint) {}
+      try {
+        var titleEl0 = document.getElementById("roomTitle");
+        if (titleEl0) titleEl0.textContent = "대화방";
+      } catch (e0) {}
+      return;
+    }
+
+    // 방 입장: lastSeenTs 갱신(알림 오탐 방지)
+    try {
+      if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+        window.SignalBus.markSeenTs(currentRoomId, Date.now());
+      }
+    } catch (e1) {}
+
+    // Firebase ref 갱신
+    stopListen();
+    try {
+      var db0 = ensureFirebase();
+      if (db0 && db) {
+        var p = getFirebasePath(currentRoomId);
+        ref = p ? db.ref(p) : null;
+      }
+    } catch (e2) {}
+
+    clearChatView();
+    // Firebase에서 먼저 빠르게 로딩 (구독 시작)
+    startFirebaseMsgListen(currentRoomId);
+    // 구글 시트 백업도 병렬 로딩 (Firebase에 없는 이전 내용 보완)
+    loadRecentFromSheet(currentRoomId);
+
+    // 상단 상태
+    try {
+      var titleEl = document.getElementById("roomTitle");
+      if (titleEl && meta && meta.name) titleEl.textContent = meta.name;
+    } catch (e3) {}
+  }
+
+  // chat-rooms.js 에서 방이 바뀔 때 호출
+  try {
+    window.__onRoomChanged = function (roomId, meta) {
+      switchRoom(roomId, meta);
+    };
+  } catch (e) {}
+  function init() {
+    bodyEl = document.getElementById("messengerBody");
+    statusEl = document.getElementById("msgStatus");
+    msgInput = document.getElementById("msgInput");
+    sendBtn = document.getElementById("msgSendBtn");
+
+    loadUserFromStorage();
+
+    // (알림음 정책) 첫 터치/클릭 이후에만 소리 재생 가능 → 미리 바인딩
+    NotifySound.bindUserGesture(document);
+    // signals 알림(방별 reply 감지) 초기화
+    try {
+      if (window.SignalBus && typeof window.SignalBus.attach === "function") {
+        ensureAnonAuth().then(function () {
+          try {
+            var db0 = ensureFirebase();
+            if (db0) {
+              window.SignalBus.attach({
+                db: db0,
+                getMyId: function () { return myId || ""; },
+                onSignal: function (info) {
+                  // 큐 기반 중계(onMessage)가 기본. onSignal은 fallback 용도로만 남깁니다.
+                },
+                onMessage: function (msgInfo) {
+                  try { __applyRelayMessage(msgInfo); } catch (e) {}
+                },
+                onNotify: function (info) {
+                  // 현재 열려있는 방이면 알림 생략
+                  if (info && info.roomId && currentRoomId && info.roomId === currentRoomId) return;
+
+
+// 방문(입장)하지 않은 방은 알림/소리/점 표시를 하지 않음
+try {
+  if (!isVisitedRoomForNotify(info.roomId)) return;
+} catch (eV) {}
+
+                  // 방 목록에 "새 글"(미확인) 표시
+                  try {
+                    if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
+                      window.RoomUnreadBadge.mark(info.roomId, info.ts);
+                    }
+                  } catch (eBadge) {}
+
+                  if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
+                    NotifySound.playDdiring();
+                    if (NotifySetting.maybeShow) {
+                      NotifySetting.maybeShow({
+                        room_id: info.roomId,
+                        user_id: info.user_id,
+                        ts: info.ts,
+                        nickname: "알림",
+                        text: "새 메시지"
+                      });
+                    }
+                  }
+                }
+              });
+            }
+          } catch (e2) {}
+        }).catch(function () {});
+      }
+    } catch (e) {}
+
+attachEvents();
+
+    initImageZoom();
+
+    // 대화방 초기화
+    // - 방 목록은 "방 목록 패널을 열 때만" 서버에서 갱신합니다.
+    // - 현재 방은 localStorage(ghostActiveRoomId/Name) 기반으로 복원합니다.
+    try {
+      if (window.ChatRooms && typeof window.ChatRooms.init === "function") {
+        window.ChatRooms.init(); // 여기서는 목록 API를 호출하지 않음
+      }
+    } catch (e0) {}
+
+        var initialRoomId = "";
+    var initialRoomName = "";
+    try {
+      var rid = localStorage.getItem("ghostActiveRoomId");
+      var rname = localStorage.getItem("ghostActiveRoomName");
+      if (rid && String(rid).trim()) initialRoomId = String(rid).trim();
+      if (rname && String(rname).trim()) initialRoomName = String(rname).trim();
+    } catch (e1) {}
+
+    // 저장된 방이 있으면 그 방으로, 없으면 기본 '전체 대화방(global)'로 접속
+    if (!initialRoomId) {
+      initialRoomId = "global";
+      if (!initialRoomName) initialRoomName = "전체 대화방";
+    }
+
+    switchRoom(initialRoomId, { room_id: initialRoomId, name: initialRoomName || (initialRoomId === "global" ? "전체 대화방" : "대화방"), is_global: (initialRoomId === "global"), can_leave: (initialRoomId !== "global") });
+
+    // 시작 시 현재 방은 이미 보고 있는 상태로 간주 → 미확인 표시 제거
+    try {
+      if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") {
+        window.RoomUnreadBadge.clear(initialRoomId);
+      }
+    } catch (eBadgeInit) {}
+
+    // 프로필 매니저: 기어버튼 삽입 + 배경 복원
+    try {
+      if (window.ProfileManager) {
+        if (typeof window.ProfileManager.applyBackground === "function") {
+          var _me = myNickname || "";
+          if (_me) window.ProfileManager.applyBackground(_me);
+        }
+      }
+    } catch (ePm) {}
   }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {
-    init();
+    setTimeout(init, 0);
   }
-
-  // 전역 노출 (다른 모듈에서 방 정보 접근용)
-  window.__getSocialRoomId = function () { return currentRoomId; };
-
 })();
