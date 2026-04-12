@@ -562,9 +562,36 @@ var NotifySetting = (function () {
     var __fbDb3 = ensureFirebase();
     if (!__fbDb3 || !__fbPath3) return;
 
-    var subStartTs = Date.now(); // 구독 시작 시각
-    var isReady = false;        // 초기 로딩 완료 여부
-    setTimeout(function () { isReady = true; }, 2000); // 2초 후 새 메시지 감지 활성화
+    var subStartTs = Date.now();
+    var initialLoadDone = false;  // 초기 배치 로딩 완료 여부
+    var batchQueue = [];          // 초기 로딩 중 쌓이는 메시지 버퍼
+    var batchTimer = null;
+
+    // 초기 배치 플러시 - 한 번에 renderAll
+    function flushBatch() {
+      if (batchQueue.length === 0) return;
+      // 중복 제거 후 messages에 추가
+      batchQueue.forEach(function (msg) {
+        var dup = false;
+        for (var i = 0; i < messages.length; i++) {
+          if (messages[i] && (messages[i].key === msg.key || messages[i].mid === msg.mid)) { dup = true; break; }
+        }
+        if (!dup) messages.push(msg);
+      });
+      batchQueue = [];
+      messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
+      if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
+      renderAll(); // 한 번만 전체 렌더
+      initialLoadDone = true;
+    }
+
+    // 300ms 동안 추가 메시지 없으면 배치 완료로 간주 (충분한 여유)
+    function scheduleBatchFlush() {
+      clearTimeout(batchTimer);
+      batchTimer = setTimeout(function () {
+        flushBatch();
+      }, 300);
+    }
 
     try {
       var q = __fbDb3.ref(__fbPath3).orderByChild("ts").limitToLast(100);
@@ -575,9 +602,12 @@ var NotifySetting = (function () {
           if (!val) return;
 
           var mid = val.mid || snap.key;
+          // 이미 있는 메시지 중복 방지
           for (var i = 0; i < messages.length; i++) {
             if (messages[i] && (messages[i].key === snap.key || messages[i].mid === mid)) return;
           }
+
+          var isNewMsg = initialLoadDone && (Number(val.ts || 0) > subStartTs);
 
           var msg = {
             key:       snap.key,
@@ -592,30 +622,36 @@ var NotifySetting = (function () {
             ts:        val.ts || Date.now(),
             room_id:   roomId,
             _firebase: true,
-            // 구독 준비 완료 후 && 현재 시각 기준으로 온 메시지만 새 메시지
-            _isNew:    isReady && (Number(val.ts || 0) > subStartTs)
+            _isNew:    isNewMsg
           };
 
           if (msg.type === "photo") msg.type = "image";
 
-          messages.push(msg);
-          messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
-          if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
-          renderAll();
+          if (!initialLoadDone) {
+            // 초기 로딩: 버퍼에 쌓아두고 배치 플러시
+            batchQueue.push(msg);
+            scheduleBatchFlush();
+          } else {
+            // 실시간 새 메시지: append only (전체 재렌더 없음)
+            messages.push(msg);
+            messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
+            appendNewMessage(msg);
 
-          // 현재 보고 있는 방이 아니면 미확인 배지 증가
-          // (Firebase child_added는 과거 메시지도 포함하므로 구독 시작 후 일정 시간 지난 것만)
-          try {
-            if (window.PwaManager && msg._isNew) {
-              window.PwaManager.incrementUnread(roomId);
-            }
-          } catch (eBadge) {}
+            // 미확인 배지
+            try {
+              if (window.PwaManager && msg._isNew) {
+                window.PwaManager.incrementUnread(roomId);
+              }
+            } catch (eBadge) {}
+          }
         } catch (e) {}
       };
       q.on("child_added", handler);
       __fbMsgSub = { ref: q, handler: handler };
+
       // 30일 청소
       setTimeout(function () { __pruneOldFirebaseMessages(roomId); }, 3000);
+
     } catch (e2) {
       console.warn("[messenger] Firebase 구독 실패:", e2.message || e2);
     }
@@ -1024,8 +1060,17 @@ var NotifySetting = (function () {
     });
   }
 
+  /* ── 렌더링 최적화 ──────────────────────────────────────────
+     - 초기 로딩: 배치 처리 (100개를 한 번에 그림)
+     - 새 메시지: appendMessage만 (전체 재렌더 안 함)
+     ──────────────────────────────────────────────────────── */
+  var _renderBatchTimer = null;
+  var _lastRenderedCount = 0;
+
+  /* 전체 재렌더 (방 전환 / 시트 폴백 등 전체 갱신 필요 시) */
   function renderAll() {
     if (!bodyEl) return;
+    _lastRenderedCount = 0;
     bodyEl.innerHTML = "";
     if (!messages || messages.length === 0) {
       var empty = document.createElement("div");
@@ -1034,18 +1079,51 @@ var NotifySetting = (function () {
       bodyEl.appendChild(empty);
       return;
     }
-
+    var frag = document.createDocumentFragment();
     var lastKey = null;
+    var tempBody = { appendChild: function (el) { frag.appendChild(el); } };
     messages.forEach(function (m) {
       if (!m) return;
       var ts = m.ts || Date.now();
       var key = formatDateKey(ts);
       if (lastKey !== key) {
-        appendDateSeparator(ts);
+        var sep = document.createElement("div");
+        sep.className = "date-separator";
+        sep.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
+        frag.appendChild(sep);
         lastKey = key;
       }
+      // appendMessage를 bodyEl 대신 frag에
+      var _orig = bodyEl;
+      bodyEl = tempBody;
       appendMessage(m);
+      bodyEl = _orig;
     });
+    bodyEl.appendChild(frag);
+    _lastRenderedCount = messages.length;
+    bodyEl.scrollTop = bodyEl.scrollHeight;
+  }
+
+  /* 새 메시지 1개 추가 (전체 재렌더 없이 append only) */
+  function appendNewMessage(msg) {
+    if (!bodyEl || !msg) return;
+    // 빈 힌트 제거
+    var hint = bodyEl.querySelector(".empty-hint");
+    if (hint) hint.remove();
+
+    var ts = msg.ts || Date.now();
+    var key = formatDateKey(ts);
+    // 날짜가 바뀌었으면 구분선 추가
+    var lastSep = bodyEl.querySelector(".date-separator:last-of-type");
+    var lastKey = lastSep ? lastSep.querySelector("span").textContent : null;
+    if (lastKey !== formatDateLabel(ts)) {
+      var sep2 = document.createElement("div");
+      sep2.className = "date-separator";
+      sep2.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
+      bodyEl.appendChild(sep2);
+    }
+    appendMessage(msg);
+    _lastRenderedCount++;
   }
 
   async function loadRecentFromSheet(roomId) {
@@ -1279,21 +1357,13 @@ function __applyRelayMessage(msgInfo) {
 
     messages.push(m);
     if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
-    renderAll();
+    appendNewMessage(m);
   } catch (e) {}
 }
 
 function scheduleRoomRefresh(roomId) {
-    try {
-      if (!roomId) return;
-      if (!currentRoomId) return;
-      if (String(roomId) !== String(currentRoomId)) return;
-
-      clearTimeout(__roomRefreshTimer);
-      __roomRefreshTimer = setTimeout(function () {
-        try { loadRecentFromSheet(roomId); } catch (e) {}
-      }, 200);
-    } catch (e0) {}
+    // Firebase 실시간 구독으로 대체됨 - 시트 재로딩 불필요
+    return;
   }
 
   function startListen() {
@@ -1497,7 +1567,7 @@ function scheduleRoomRefresh(roomId) {
     try {
       messages.push(__localMsg);
       if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
-      renderAll();
+      appendNewMessage(__localMsg); // append only - 전체 재렌더 없음
       if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
         window.SignalBus.markSeenTs(currentRoomId || "", now);
       }
