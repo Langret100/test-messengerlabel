@@ -562,16 +562,19 @@ var NotifySetting = (function () {
     var __fbDb3 = ensureFirebase();
     if (!__fbDb3 || !__fbPath3) return;
 
+    var subStartTs = Date.now(); // 구독 시작 시각
+    var isReady = false;        // 초기 로딩 완료 여부
+    setTimeout(function () { isReady = true; }, 2000); // 2초 후 새 메시지 감지 활성화
+
     try {
       var q = __fbDb3.ref(__fbPath3).orderByChild("ts").limitToLast(100);
       var handler = function (snap) {
         try {
-          if (currentRoomId !== roomId) return; // 방 바뀌면 무시
+          if (currentRoomId !== roomId) return;
           var val = snap.val();
           if (!val) return;
 
           var mid = val.mid || snap.key;
-          // 이미 messages 배열에 있으면 중복 건너뜀
           for (var i = 0; i < messages.length; i++) {
             if (messages[i] && (messages[i].key === snap.key || messages[i].mid === mid)) return;
           }
@@ -588,16 +591,25 @@ var NotifySetting = (function () {
             file_name: val.fileName || val.file_name || "",
             ts:        val.ts || Date.now(),
             room_id:   roomId,
-            _firebase: true
+            _firebase: true,
+            // 구독 준비 완료 후 && 현재 시각 기준으로 온 메시지만 새 메시지
+            _isNew:    isReady && (Number(val.ts || 0) > subStartTs)
           };
 
-          // 이미지/파일 타입 보정
           if (msg.type === "photo") msg.type = "image";
 
           messages.push(msg);
           messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
           if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
           renderAll();
+
+          // 현재 보고 있는 방이 아니면 미확인 배지 증가
+          // (Firebase child_added는 과거 메시지도 포함하므로 구독 시작 후 일정 시간 지난 것만)
+          try {
+            if (window.PwaManager && msg._isNew) {
+              window.PwaManager.incrementUnread(roomId);
+            }
+          } catch (eBadge) {}
         } catch (e) {}
       };
       q.on("child_added", handler);
@@ -2110,8 +2122,20 @@ onPickImage: async function () {
     clearChatView();
     // Firebase에서 먼저 빠르게 로딩 (구독 시작)
     startFirebaseMsgListen(currentRoomId);
-    // 구글 시트 백업도 병렬 로딩 (Firebase에 없는 이전 내용 보완)
-    loadRecentFromSheet(currentRoomId);
+
+    // 방 입장 → 미확인 배지 초기화
+    try {
+      if (window.PwaManager) window.PwaManager.clearUnread(currentRoomId);
+      window.dispatchEvent(new CustomEvent("ghost:room-entered", { detail: { roomId: currentRoomId } }));
+    } catch (eBadge) {}
+
+    // 구글 시트 백업 로딩: Firebase 데이터가 없을 때만 (1.5초 후 판단)
+    var _roomForSheet = currentRoomId;
+    setTimeout(function () {
+      if (currentRoomId !== _roomForSheet) return; // 방이 바뀌면 스킵
+      if (messages.length > 0) return; // Firebase에서 이미 불러왔으면 스킵
+      loadRecentFromSheet(_roomForSheet); // Firebase 데이터 없을 때만 시트 폴백
+    }, 1500);
 
     // 상단 상태
     try {

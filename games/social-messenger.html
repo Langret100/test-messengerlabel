@@ -2,8 +2,18 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>실시간 톡</title>
+  <title>마이메신저</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- PWA -->
+  <link rel="manifest" href="../manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="마이메신저">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="apple-touch-icon" href="../images/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="../images/icons/icon-32x32.png">
   <style>
     * {
       box-sizing: border-box;
@@ -887,6 +897,7 @@
   <script src="../js/signals.js"></script>
   <script src="../js/room-message-stream.js"></script>
   <script src="../js/firebase-messages.js"></script>
+  <script src="../js/pwa-manager.js"></script>
   <script src="../js/profile-manager.js"></script>
   <script src="../js/social-messenger.js"></script>
 </body>

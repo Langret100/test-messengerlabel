@@ -105,14 +105,13 @@
         if (m) mime = m[1];
       }
 
-      var body = new URLSearchParams();
-      body.append("mode",       "social_upload_image");
-      body.append("mime",       mime);
-      body.append("data",       base64);
-      body.append("user_id",    nickname);
-      body.append("nickname",   nickname);
-      body.append("ts",         String(Date.now()));
-      body.append("is_profile", "1");
+      var body = new FormData();
+      body.append("mode",     "social_upload_image");
+      body.append("mime",     mime);
+      body.append("data",     base64);
+      body.append("user_id",  nickname);
+      body.append("nickname", nickname);
+      body.append("ts",       String(Date.now()));
 
       fetch(uploadUrl, { method: "POST", body: body })
         .then(function (res) { return res.json(); })
@@ -224,7 +223,11 @@
       "<div id='pmBgPreview' style='height:50px;border-radius:10px;background:#f3f4f6;border:1px solid #e5e7eb;background-size:cover;background-position:center;'></div>",
       "<input id='pmBgInput' type='file' accept='image/*' style='display:none'></div>",
       "<button id='pmSave' type='button' style='border:0;background:#2563eb;color:#fff;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;'>저장</button>",
-      "<div id='pmStatus' style='font-size:12px;color:#6b7280;text-align:center;min-height:16px;'></div>"
+      "<div id='pmStatus' style='font-size:12px;color:#6b7280;text-align:center;min-height:16px;'></div>",
+      /* PWA 설치 버튼 */
+      "<button id='pwaInstallBtn' type='button' style='border:1px solid #16a34a;background:#f0fdf4;color:#16a34a;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;'>",
+      "  <span>📱</span> <span>바탕화면에 앱 추가</span>",
+      "</button>"
     ].join("");
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -293,12 +296,42 @@
       applyBackground(me);
       if (pendingImg) {
         uploadProfileImage(me, pendingImg)
-          .then(function () { st.textContent = "✅ 저장 완료!"; refreshAllAvatars(); setTimeout(close, 900); })
+          .then(function () { st.textContent = "✅ 저장 완료!"; refreshAllAvatars(); refreshGearButton(me); setTimeout(close, 900); })
           .catch(function (err) { st.textContent = "⚠️ 업로드 실패: " + (err && err.message || "오류"); refreshAllAvatars(); });
       } else {
         st.textContent = "✅ 저장 완료!"; setTimeout(close, 700);
       }
     });
+
+    /* PWA 설치 버튼 */
+    var pwaBtn = document.getElementById("pwaInstallBtn");
+    if (pwaBtn) {
+      // 설치 가능 여부에 따라 표시 여부 결정
+      if (!window.PwaManager || !window.PwaManager.canInstall()) {
+        // iOS Safari나 이미 설치된 경우에도 버튼 표시 (안내 제공)
+        var isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+        var isStandalone = window.matchMedia("(display-mode: standalone)").matches;
+        if (isStandalone) {
+          pwaBtn.style.display = "none"; // 이미 설치됨
+        } else if (!isIos) {
+          pwaBtn.style.opacity = "0.5";
+          pwaBtn.title = "브라우저가 자동 설치를 지원하지 않으면 브라우저 메뉴 → '홈 화면에 추가'를 이용해주세요.";
+        }
+      }
+      pwaBtn.addEventListener("click", function () {
+        if (window.PwaManager) {
+          window.PwaManager.install().then(function (result) {
+            if (result === "accepted") {
+              pwaBtn.textContent = "✅ 앱 설치 완료!";
+              pwaBtn.style.background = "#dcfce7";
+              setTimeout(close, 1200);
+            } else if (result === "ios_guide") {
+              // iOS 안내는 PwaManager 내부에서 처리
+            }
+          });
+        }
+      });
+    }
   }
 
   function injectGearButton() {
@@ -306,22 +339,41 @@
     if (!topbar || document.getElementById("profileGearBtn")) return;
     var btn = document.createElement("button");
     btn.id = "profileGearBtn"; btn.type = "button"; btn.title = "프로필/배경 설정";
-    btn.textContent = "⚙";
-    btn.style.cssText = "position:absolute;right:14px;top:50%;transform:translateY(-50%);border:0;background:transparent;font-size:19px;cursor:pointer;color:#9ca3af;padding:4px 2px;transition:color 0.15s;";
-    btn.addEventListener("mouseenter", function () { btn.style.color = "#2563eb"; });
-    btn.addEventListener("mouseleave", function () { btn.style.color = "#9ca3af"; });
+    btn.style.cssText = "position:absolute;right:10px;top:50%;transform:translateY(-50%);border:0;background:transparent;padding:0;cursor:pointer;line-height:0;";
+
+    var img = document.createElement("img");
+    img.id = "profileGearImg";
+    img.style.cssText = "width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,0.7);background:#e0e7ff;display:block;";
+    img.src = DEFAULT_AVATAR;
+    img.alt = "내 프로필";
+    img.onerror = function () { this.src = DEFAULT_AVATAR; };
+    btn.appendChild(img);
+
     btn.addEventListener("click", function (e) { e.stopPropagation(); openProfileModal(); });
     topbar.appendChild(btn);
+  }
+
+  /* 내 프로필 이미지로 버튼 갱신 */
+  function refreshGearButton(nickname) {
+    var img = document.getElementById("profileGearImg");
+    if (!img) return;
+    var url = getAvatarUrl(nickname);
+    if (url) img.src = url;
   }
 
   function init() {
     injectGearButton();
     var me = safeMyNickname();
-    if (me) applyBackground(me);
+    if (me) { applyBackground(me); refreshGearButton(me); }
     window.addEventListener("ghost:login-complete", function (ev) {
       try {
         var nick = (ev.detail && ev.detail.nickname) ? ev.detail.nickname : safeMyNickname();
-        if (nick) { applyBackground(nick); fetchAndCacheProfile(nick); injectGearButton(); }
+        if (!nick) return;
+        applyBackground(nick);
+        fetchAndCacheProfile(nick);
+        injectGearButton();
+        // 프로필 이미지 로컬 캐시 로드 후 버튼 갱신
+        setTimeout(function () { refreshGearButton(nick); }, 300);
       } catch (e) {}
     });
   }
@@ -333,6 +385,7 @@
     uploadProfileImage:   uploadProfileImage,
     openProfileModal:     openProfileModal,
     applyBackground:      applyBackground,
+    refreshGearButton:    refreshGearButton,
     DEFAULT_AVATAR:       DEFAULT_AVATAR
   };
 
