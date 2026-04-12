@@ -455,22 +455,70 @@
       width: 100%;
     }
 
-    /* ── 카톡 스타일: 대화방 목록 항상 왼쪽에 고정 ── */
+    /* ══════════════════════════════════════════════════════
+       대화방 패널 레이아웃
+       - PC  : 오버레이(버튼 눌러야 열림, 기존 방식)
+       - 모바일 : 전체화면 슬라이드
+    ══════════════════════════════════════════════════════ */
+
+    /* 공통 기본값: flex layout에서 제거, 오버레이 방식 */
     .room-panel {
-      width: 240px;
-      min-width: 200px;
-      max-width: 240px;
+      position: fixed;
+      left: 0;
+      top: 50px;
+      bottom: 0;
+      width: 300px;
+      max-width: 86vw;
       background: #f8fafc;
       display: flex;
       flex-direction: column;
       min-height: 0;
       border-right: 1px solid rgba(0,0,0,0.08);
-      flex-shrink: 0;
-      /* position:fixed 제거 → flex 흐름에 포함 */
+      transform: translateX(-110%);
+      transition: transform 0.22s cubic-bezier(.4,0,.2,1);
+      box-shadow: 8px 0 32px rgba(15,23,42,0.15);
+      z-index: 50;
     }
-    /* .room-panel.open 은 더 이상 슬라이드 용도로 쓰지 않음 */
-    .room-panel.open { transform: none; }
-    .room-backdrop { display: none !important; } /* backdrop 완전히 숨김 */
+    .room-panel.open {
+      transform: translateX(0);
+    }
+
+    /* backdrop: 패널 뒤 어두운 배경 */
+    .room-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.28);
+      z-index: 49;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s;
+    }
+    .room-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* topbar 방 버튼: 항상 표시 */
+    .messenger-topbar-roombtn { display: flex !important; }
+
+    /* chat-panel: 항상 전체 너비 */
+    .chat-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    /* 모바일: 패널 전체화면 */
+    @media (max-width: 600px) {
+      .room-panel {
+        width: 100vw;
+        max-width: 100vw;
+        box-shadow: none;
+      }
+    }
     .room-panel-header {
       display: flex;
       align-items: center;
@@ -526,22 +574,6 @@
       border-left: 3px solid #2563eb;
       padding-left: 9px;
     }
-    /* 방 아이콘 (채팅 버블 아이콘) */
-    .room-item-icon {
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 17px;
-      flex-shrink: 0;
-      color: #fff;
-    }
-    .room-item.active .room-item-icon {
-      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-    }
     .room-item-info {
       flex: 1;
       min-width: 0;
@@ -584,52 +616,52 @@
     }
     .room-unread-badge.show { display: flex; }
 
-    .chat-panel {
-      flex: 1;
+    /* ── 방 아이콘 프로필 그리드 (카톡 스타일) ── */
+    .room-item-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%);
       display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 0;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #fff;
+      overflow: hidden;
+      position: relative;
     }
-
-    /* 모바일: 패널은 숨기고 topbar 버튼으로 토글 */
-    @media (max-width: 600px) {
-      .room-panel {
-        position: fixed;
-        left: 0;
-        top: 50px;
-        bottom: 0;
-        z-index: 50;
-        transform: translateX(-110%);
-        transition: transform 0.2s ease-out;
-        box-shadow: 8px 0 32px rgba(15,23,42,0.18);
-        width: 220px;
-        min-width: 160px;
-      }
-      .room-panel.open {
-        transform: translateX(0);
-      }
-      .room-backdrop {
-        display: block !important;
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.3);
-        z-index: 49;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s;
-      }
-      .room-backdrop.open {
-        opacity: 1;
-        pointer-events: auto;
-      }
-      /* 모바일에서 topbar 방 버튼 다시 보이게 */
-      .messenger-topbar-roombtn { display: flex !important; }
+    .room-item.active .room-item-icon {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
     }
-
-    /* 데스크탑: topbar 방 버튼 숨김 (패널이 항상 보이므로) */
-    @media (min-width: 601px) {
-      .messenger-topbar-roombtn { display: none !important; }
+    /* 1명: 꽉 채움 */
+    .room-icon-grid-1 { padding: 0; }
+    .room-icon-grid-1 .room-icon-avatar {
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    /* 2명: 세로 반반 */
+    .room-icon-grid-2 {
+      flex-direction: row;
+      gap: 1px;
+      background: #e5e7eb;
+      padding: 0;
+    }
+    .room-icon-grid-2 .room-icon-avatar {
+      width: 50%; height: 100%;
+      object-fit: cover;
+    }
+    /* 3~4명: 2x2 그리드 */
+    .room-icon-grid-4 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 1px;
+      background: #e5e7eb;
+      padding: 0;
+    }
+    .room-icon-grid-4 .room-icon-avatar {
+      width: 100%; height: 100%;
+      object-fit: cover;
     }
 
   

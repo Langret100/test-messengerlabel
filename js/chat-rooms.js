@@ -200,10 +200,40 @@
       item.className = "room-item" + (r.room_id === activeRoomId ? " active" : "");
       item.setAttribute("data-room-id", r.room_id);
 
-      // 아이콘
+      // ── 프로필 그리드 아이콘 (카톡 스타일) ──
       var icon = document.createElement("div");
       icon.className = "room-item-icon";
-      icon.textContent = r.room_id === "global" ? "💬" : "🏠";
+      var participants2 = Array.isArray(r.participants) ? r.participants : [];
+
+      if (r.room_id === "global") {
+        icon.textContent = "🌐";
+        icon.style.fontSize = "22px";
+      } else if (participants2.length === 0) {
+        icon.textContent = "💬";
+        icon.style.fontSize = "20px";
+      } else {
+        var showList = participants2.slice(0, 4);
+        icon.classList.add(
+          showList.length === 1 ? "room-icon-grid-1" :
+          showList.length === 2 ? "room-icon-grid-2" : "room-icon-grid-4"
+        );
+        showList.forEach(function (nick) {
+          var av = document.createElement("img");
+          av.className = "room-icon-avatar";
+          av.setAttribute("data-profile-nick", nick);
+          av.alt = nick;
+          av.src = (window.ProfileManager && window.ProfileManager.getAvatarUrl)
+            ? window.ProfileManager.getAvatarUrl(nick) : "";
+          av.onerror = function () {
+            this.onerror = null;
+            this.src = (window.ProfileManager && window.ProfileManager.DEFAULT_AVATAR) || "";
+          };
+          if (window.ProfileManager && window.ProfileManager.fetchAndCacheProfile) {
+            setTimeout(function () { window.ProfileManager.fetchAndCacheProfile(nick); }, 600);
+          }
+          icon.appendChild(av);
+        });
+      }
       item.appendChild(icon);
 
       // 정보 래퍼
@@ -217,20 +247,15 @@
 
       var meta = document.createElement("div");
       meta.className = "room-meta";
-
       var hasPwd2 = !!r.has_password || (r.enter_mode === "password");
-      var participants2 = Array.isArray(r.participants) ? r.participants : [];
-      var c = (typeof r.members_count === "number") ? r.members_count : (participants2.length ? participants2.length : 0);
+      var c = (typeof r.members_count === "number") ? r.members_count
+            : (participants2.length ? participants2.length : 0);
       var me2 = safeNick();
-
-      var isPublic2 = !hasPwd2;
-      var isMember2 = isPublic2 || (participants2.indexOf(me2) >= 0);
-
+      var isMember2 = !hasPwd2 || (participants2.indexOf(me2) >= 0);
       if (hasPwd2 && !isMember2) meta.textContent = "🔒 비번 필요";
-      else if (hasPwd2) meta.textContent = c ? ("참여 " + c) : "🔒 비번방";
+      else if (hasPwd2) meta.textContent = c ? ("참여 " + c + "명") : "🔒 비번방";
       else meta.textContent = c ? ("참여 " + c + "명") : "공개방";
       info.appendChild(meta);
-
       item.appendChild(info);
 
       // 미확인 배지
