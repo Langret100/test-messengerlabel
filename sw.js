@@ -35,17 +35,38 @@ self.addEventListener("activate", function (e) {
 });
 
 self.addEventListener("fetch", function (e) {
-  // 네트워크 우선, 실패 시 캐시
+  // GET 요청만 캐시 처리, 나머지는 그냥 통과
+  if (e.request.method !== "GET") return;
+
+  // Apps Script / Firebase 요청은 캐시 안 함
+  var url = e.request.url;
+  if (url.indexOf("script.google.com") > -1 ||
+      url.indexOf("firebaseio.com") > -1 ||
+      url.indexOf("googleapis.com") > -1) {
+    return;
+  }
+
   e.respondWith(
-    fetch(e.request).then(function (res) {
-      var clone = res.clone();
-      caches.open(CACHE_NAME).then(function (cache) {
-        if (e.request.method === "GET") cache.put(e.request, clone);
-      });
-      return res;
-    }).catch(function () {
-      return caches.match(e.request);
-    })
+    fetch(e.request)
+      .then(function (res) {
+        // 유효한 응답만 캐시
+        if (res && res.status === 200 && res.type === "basic") {
+          var clone = res.clone();
+          caches.open(CACHE_NAME).then(function (cache) {
+            cache.put(e.request, clone);
+          });
+        }
+        return res;
+      })
+      .catch(function () {
+        return caches.match(e.request).then(function (cached) {
+          // 캐시에도 없으면 빈 Response 반환 (TypeError 방지)
+          return cached || new Response("", {
+            status: 503,
+            statusText: "Offline"
+          });
+        });
+      })
   );
 });
 
