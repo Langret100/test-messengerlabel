@@ -129,6 +129,25 @@
 
   window.ChatFile = {
     DEFAULT_MAX_BYTES: DEFAULT_MAX_BYTES,
-    pickAndUpload: pickAndUpload
+    pickAndUpload: pickAndUpload,
+    open: function () {
+      var me = "";
+      try {
+        if (window.currentUser && window.currentUser.nickname) me = window.currentUser.nickname;
+        else { var raw = localStorage.getItem("ghostUser"); if (raw) { var u = JSON.parse(raw); if (u && u.nickname) me = u.nickname; } }
+      } catch (e) {}
+      pickAndUpload({
+        user_id: (window.currentUser && window.currentUser.user_id) || "",
+        nickname: me
+      }).then(function (result) {
+        if (typeof window.sendChatFile === "function") {
+          window.sendChatFile(result.url, result.fileName || "파일");
+        }
+      }).catch(function (err) {
+        if (err && err.message !== "no file") {
+          if (typeof window.showBubble === "function") window.showBubble("파일 업로드에 실패했어요.");
+        }
+      });
+    }
   };
 })();

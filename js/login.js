@@ -240,6 +240,13 @@ function setStatus(msg) {
         } catch (e) {}
         window.__loginConfirmed = true;
 
+        // 프로필 매니저 등에 알림
+        try {
+          window.dispatchEvent(new CustomEvent("ghost:login-complete", {
+            detail: { nickname: window.currentUser.nickname, user_id: window.currentUser.user_id }
+          }));
+        } catch (eEv) {}
+
         setStatus("로그인에 성공했어요!");
         if (typeof showBubble === "function") {
           showBubble((window.currentUser.nickname || username) + "님, 어서 와요!");
@@ -294,6 +301,11 @@ function setStatus(msg) {
           localStorage.setItem("ghostUser", JSON.stringify(window.currentUser));
         } catch (e) {}
         window.__loginConfirmed = true;
+        try {
+          window.dispatchEvent(new CustomEvent("ghost:login-complete", {
+            detail: { nickname: window.currentUser.nickname, user_id: window.currentUser.user_id }
+          }));
+        } catch (eEv) {}
         setStatus("회원가입이 완료되었어요! 자동으로 로그인했어요.");
         if (typeof showBubble === "function") {
           showBubble((window.currentUser.nickname || username) + "님, 반가워요!");

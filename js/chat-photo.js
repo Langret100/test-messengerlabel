@@ -185,7 +185,35 @@
     });
   }
 
+  function doPickAndSend(captureMode) {
+    var me = "";
+    try {
+      if (window.currentUser && window.currentUser.nickname) me = window.currentUser.nickname;
+      else {
+        var raw = localStorage.getItem("ghostUser");
+        if (raw) { var u = JSON.parse(raw); if (u && u.nickname) me = u.nickname; }
+      }
+    } catch (e) {}
+
+    pickAndUpload({
+      capture: !!captureMode,
+      user_id: (window.currentUser && window.currentUser.user_id) || "",
+      nickname: me
+    }).then(function (result) {
+      // social-messenger.js 의 전송 함수로 연결
+      if (typeof window.sendChatPhoto === "function") {
+        window.sendChatPhoto(result.url, result.url);
+      }
+    }).catch(function (err) {
+      if (err && err.message !== "no file") {
+        if (typeof window.showBubble === "function") window.showBubble("사진 업로드에 실패했어요.");
+      }
+    });
+  }
+
   window.ChatPhoto = {
-    pickAndUpload: pickAndUpload
+    pickAndUpload: pickAndUpload,
+    openCamera:    function () { doPickAndSend(true);  },
+    openGallery:   function () { doPickAndSend(false); }
   };
 })();
