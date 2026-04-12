@@ -36,12 +36,15 @@
     } catch (e) {}
   }
 
+  function isMobile() {
+    return window.innerWidth <= 600;
+  }
+
   function openPanel() {
+    if (!isMobile()) return; // 데스크탑은 항상 열려있음
     if (panel) panel.classList.add("open");
     if (backdrop) backdrop.classList.add("open");
     if (btn) btn.setAttribute("aria-expanded", "true");
-
-    // 방 목록은 "열 때만" 서버에서 갱신
     try {
       if (window.ChatRooms && typeof window.ChatRooms.reload === "function") {
         window.ChatRooms.reload();
@@ -50,12 +53,14 @@
   }
 
   function closePanel() {
+    if (!isMobile()) return;
     if (panel) panel.classList.remove("open");
     if (backdrop) backdrop.classList.remove("open");
     if (btn) btn.setAttribute("aria-expanded", "false");
   }
 
   function togglePanel() {
+    if (!isMobile()) return;
     if (!panel) return;
     if (panel.classList.contains("open")) closePanel();
     else openPanel();
@@ -92,14 +97,19 @@
     listEl = document.getElementById("roomList");
     titleEl = document.getElementById("roomTitle");
 
-    if (!btn || !panel || !backdrop) return;
+    if (!panel) return;
 
-    // 기본은 닫힘
-    closePanel();
+    // 데스크탑: 패널 항상 열림 상태 유지 (open 클래스 불필요 - flex layout)
+    // 모바일: 기본 닫힘
+    if (isMobile()) {
+      if (panel) panel.classList.remove("open");
+      if (backdrop) backdrop.classList.remove("open");
+    }
+
     syncButtonLabel();
 
-    btn.addEventListener("click", togglePanel);
-    backdrop.addEventListener("click", closePanel);
+    if (btn) btn.addEventListener("click", togglePanel);
+    if (backdrop) backdrop.addEventListener("click", closePanel);
 
     document.addEventListener("keydown", function (e) {
       if (!e) return;
@@ -108,6 +118,13 @@
 
     bindAutoCloseOnRoomPick();
     bindTitleObserver();
+
+    // 시작 시 방 목록 즉시 로드
+    try {
+      if (window.ChatRooms && typeof window.ChatRooms.reload === "function") {
+        window.ChatRooms.reload();
+      }
+    } catch (e) {}
   }
 
   if (document.readyState === "loading") {

@@ -200,10 +200,20 @@
       item.className = "room-item" + (r.room_id === activeRoomId ? " active" : "");
       item.setAttribute("data-room-id", r.room_id);
 
+      // 아이콘
+      var icon = document.createElement("div");
+      icon.className = "room-item-icon";
+      icon.textContent = r.room_id === "global" ? "💬" : "🏠";
+      item.appendChild(icon);
+
+      // 정보 래퍼
+      var info = document.createElement("div");
+      info.className = "room-item-info";
+
       var name = document.createElement("div");
       name.className = "room-name";
       name.textContent = r.name || "대화방";
-      item.appendChild(name);
+      info.appendChild(name);
 
       var meta = document.createElement("div");
       meta.className = "room-meta";
@@ -213,16 +223,17 @@
       var c = (typeof r.members_count === "number") ? r.members_count : (participants2.length ? participants2.length : 0);
       var me2 = safeNick();
 
-      var isPublic2 = !hasPwd2; // 비번 없으면 공개방
-var isMember2 = isPublic2 || (participants2.indexOf(me2) >= 0);
+      var isPublic2 = !hasPwd2;
+      var isMember2 = isPublic2 || (participants2.indexOf(me2) >= 0);
 
-      // 표시 라벨: 공개방/비번방만 사용(초대/입장제한 라벨 제거)
       if (hasPwd2 && !isMember2) meta.textContent = "🔒 비번 필요";
       else if (hasPwd2) meta.textContent = c ? ("참여 " + c) : "🔒 비번방";
-      else meta.textContent = "공개";
-item.appendChild(meta);
+      else meta.textContent = c ? ("참여 " + c + "명") : "공개방";
+      info.appendChild(meta);
 
-      // (미확인 표시) 방에 새 글이 있으면 오른쪽 위 점 표시
+      item.appendChild(info);
+
+      // 미확인 배지
       try {
         if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.applyToItem === "function") {
           window.RoomUnreadBadge.applyToItem(item, r.room_id);

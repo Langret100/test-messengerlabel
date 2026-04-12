@@ -454,41 +454,36 @@
       min-height: 0;
       width: 100%;
     }
+
+    /* ── 카톡 스타일: 대화방 목록 항상 왼쪽에 고정 ── */
     .room-panel {
       width: 240px;
-      max-width: 78vw;
       min-width: 200px;
-      background: #ffffff;
+      max-width: 240px;
+      background: #f8fafc;
       display: flex;
       flex-direction: column;
       min-height: 0;
-
-      /* 기본: 숨김(채팅창을 넓게) */
-      position: fixed;
-      left: 0;
-      top: 50px;   /* topbar 높이 */
-      bottom: 0;
-      transform: translateX(-110%);
-      transition: transform 0.18s ease-out;
-      box-shadow: 16px 0 36px rgba(15,23,42,0.18);
-      z-index: 50;
-      border-right: 1px solid rgba(0,0,0,0.06);
+      border-right: 1px solid rgba(0,0,0,0.08);
+      flex-shrink: 0;
+      /* position:fixed 제거 → flex 흐름에 포함 */
     }
-    .room-panel.open {
-      transform: translateX(0);
-    }
+    /* .room-panel.open 은 더 이상 슬라이드 용도로 쓰지 않음 */
+    .room-panel.open { transform: none; }
+    .room-backdrop { display: none !important; } /* backdrop 완전히 숨김 */
     .room-panel-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 10px 8px;
-      border-bottom: 1px solid rgba(0,0,0,0.06);
+      padding: 12px 12px 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.07);
+      background: #f8fafc;
     }
     .room-panel-title {
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
       color: #111827;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.3px;
     }
     .room-add-btn {
       width: 28px;
@@ -503,53 +498,91 @@
     .room-list {
       flex: 1;
       overflow-y: auto;
-      padding: 8px;
+      padding: 6px 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 0;
       min-height: 0;
     }
+    /* 카톡 스타일 방 아이템 */
     .room-item {
       width: 100%;
       text-align: left;
-      border: 1px solid rgba(0,0,0,0.08);
-      background: #ffffff;
-      border-radius: 14px;
-      padding: 10px 10px;
+      border: none;
+      border-bottom: 1px solid rgba(0,0,0,0.04);
+      background: transparent;
+      border-radius: 0;
+      padding: 11px 14px 11px 12px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: background 0.1s;
     }
+    .room-item:active,
+    .room-item:hover { background: rgba(37,99,235,0.06); }
     .room-item.active {
-      border-color: rgba(0,0,0,0.18);
-      background: #f8fafc;
+      background: rgba(37,99,235,0.10);
+      border-left: 3px solid #2563eb;
+      padding-left: 9px;
+    }
+    /* 방 아이콘 (채팅 버블 아이콘) */
+    .room-item-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #6366f1 0%, #2563eb 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      flex-shrink: 0;
+      color: #fff;
+    }
+    .room-item.active .room-item-icon {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    }
+    .room-item-info {
+      flex: 1;
+      min-width: 0;
     }
     .room-name {
       font-size: 13px;
-      font-weight: 800;
+      font-weight: 700;
       color: #111827;
-      line-height: 1.2;
-      word-break: break-word;
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .room-meta {
-      margin-top: 4px;
+      margin-top: 2px;
       font-size: 11px;
-      color: #6b7280;
+      color: #9ca3af;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-
-
-    /* 방별 미확인(새 글) 표시: 오른쪽 위 점 */
-    .room-item { position: relative; padding-right: 38px; }
-    .room-unread-badge{
-      position:absolute;
-      top: 12px;
+    /* 미확인 배지 */
+    .room-item { position: relative; padding-right: 30px; }
+    .room-unread-badge {
+      position: absolute;
+      top: 50%;
       right: 12px;
-      width: 10px;
-      height: 10px;
+      transform: translateY(-50%);
+      min-width: 18px;
+      height: 18px;
       border-radius: 999px;
       background: #ef4444;
-      box-shadow: 0 0 0 2px rgba(255,255,255,0.95);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
       display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
     }
-    .room-unread-badge.show{ display:block; }
+    .room-unread-badge.show { display: flex; }
 
     .chat-panel {
       flex: 1;
@@ -559,9 +592,44 @@
       min-height: 0;
     }
 
-    /* 작은 화면: 방 목록 폭을 줄이고, 필요시 스크롤 */
-    @media (max-width: 520px) {
-      .room-panel { width: 220px; min-width: 180px; }
+    /* 모바일: 패널은 숨기고 topbar 버튼으로 토글 */
+    @media (max-width: 600px) {
+      .room-panel {
+        position: fixed;
+        left: 0;
+        top: 50px;
+        bottom: 0;
+        z-index: 50;
+        transform: translateX(-110%);
+        transition: transform 0.2s ease-out;
+        box-shadow: 8px 0 32px rgba(15,23,42,0.18);
+        width: 220px;
+        min-width: 160px;
+      }
+      .room-panel.open {
+        transform: translateX(0);
+      }
+      .room-backdrop {
+        display: block !important;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.3);
+        z-index: 49;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+      }
+      .room-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      /* 모바일에서 topbar 방 버튼 다시 보이게 */
+      .messenger-topbar-roombtn { display: flex !important; }
+    }
+
+    /* 데스크탑: topbar 방 버튼 숨김 (패널이 항상 보이므로) */
+    @media (min-width: 601px) {
+      .messenger-topbar-roombtn { display: none !important; }
     }
 
   

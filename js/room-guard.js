@@ -78,17 +78,8 @@
   }
 
   function init() {
-    // 로그인 완료 후에도 방이 없으면 안내만 띄움(강제 자동입장/자동로딩 X)
-    try {
-      var rid = "";
-      try { rid = String(localStorage.getItem("ghostActiveRoomId") || "").trim(); } catch (e0) {}
-      if (rid && rid !== "global") return;
-
-      var body = document.getElementById("messengerBody");
-      if (!body) return;
-
-      renderNoRoomHint(body);
-    } catch (e) {}
+    // room-panel-toggle.js 가 closePanel()을 호출하므로 여기서는 아무것도 하지 않음
+    // 방 안내는 social-messenger.js 의 switchRoom 이 처리
   }
 
   window.RoomGuard = {
