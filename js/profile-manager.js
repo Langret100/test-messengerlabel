@@ -116,8 +116,7 @@
 
       fetch(uploadUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body: body.toString()
+        body: body
       })
         .then(function (res) { return res.json(); })
         .then(function (json) {

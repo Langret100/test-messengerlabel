@@ -59,64 +59,84 @@
   }
 
   /* 일반 브라우저 설치 안내 */
-  function showGenericInstallGuide() {
-    var existing = document.getElementById("genericInstallGuide");
+  /* 공통 안내 박스 생성 헬퍼 */
+  function _makeGuideBox(id, steps) {
+    var existing = document.getElementById(id);
     if (existing) { existing.style.display = "flex"; return; }
 
+    var overlay = document.createElement("div");
+    overlay.id = id;
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9999;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0.5);";
+
     var box = document.createElement("div");
-    box.id = "genericInstallGuide";
     box.style.cssText = [
-      "position:fixed;bottom:0;left:0;right:0;z-index:9999;",
-      "background:#1e293b;color:#fff;padding:16px 20px 28px;",
-      "border-radius:20px 20px 0 0;display:flex;flex-direction:column;gap:10px;",
-      "box-shadow:0 -4px 30px rgba(0,0,0,0.35);"
+      "width:100%;max-width:480px;",
+      "background:#1e293b;color:#fff;",
+      "padding:20px 20px 36px;",
+      "border-radius:24px 24px 0 0;",
+      "display:flex;flex-direction:column;gap:14px;",
+      "box-shadow:0 -4px 40px rgba(0,0,0,0.4);"
     ].join("");
 
-    var isAndroid = /android/i.test(navigator.userAgent);
-    var guide = isAndroid
-      ? "Chrome 메뉴(⋮) → <b>홈 화면에 추가</b>"
-      : "브라우저 메뉴 → <b>홈 화면에 추가</b> 또는 <b>앱 설치</b>";
+    var stepsHtml = steps.map(function (s, i) {
+      return [
+        "<div style='display:flex;gap:12px;align-items:flex-start;'>",
+        "  <div style='flex:0 0 auto;width:26px;height:26px;border-radius:50%;",
+        "    background:#3b82f6;display:flex;align-items:center;justify-content:center;",
+        "    font-size:13px;font-weight:800;margin-top:1px;'>" + (i + 1) + "</div>",
+        "  <div style='flex:1;font-size:14px;line-height:1.6;color:#e2e8f0;'>" + s + "</div>",
+        "</div>"
+      ].join("");
+    }).join("");
 
     box.innerHTML = [
       "<div style='display:flex;justify-content:space-between;align-items:center;'>",
-      "  <span style='font-size:15px;font-weight:800;'>📱 홈화면에 추가하기</span>",
-      "  <button onclick=\"document.getElementById('genericInstallGuide').remove()\" style='border:0;background:transparent;color:#94a3b8;font-size:20px;cursor:pointer;'>✕</button>",
+      "  <span style='font-size:16px;font-weight:800;'>📱 홈화면에 앱 추가하기</span>",
+      "  <button onclick=\"document.getElementById('" + id + "').remove()\" ",
+      "    style='border:0;background:rgba(255,255,255,0.1);color:#fff;font-size:16px;",
+      "    cursor:pointer;width:32px;height:32px;border-radius:8px;'>✕</button>",
       "</div>",
-      "<div style='font-size:13px;color:#cbd5e1;line-height:1.7;'>" + guide + "</div>",
-      "<div style='display:flex;justify-content:center;'>",
-      "  <div style='width:40px;height:4px;border-radius:2px;background:#475569;'></div>",
-      "</div>"
-    ].join("");
-    document.body.appendChild(box);
-  }
-
-  /* iOS Safari 설치 안내 */
-  function showIosInstallGuide() {
-    var existing = document.getElementById("iosInstallGuide");
-    if (existing) { existing.style.display = "flex"; return; }
-
-    var box = document.createElement("div");
-    box.id = "iosInstallGuide";
-    box.style.cssText = [
-      "position:fixed;bottom:0;left:0;right:0;z-index:9999;",
-      "background:#1e293b;color:#fff;padding:16px 20px 28px;",
-      "border-radius:20px 20px 0 0;display:flex;flex-direction:column;gap:10px;",
-      "box-shadow:0 -4px 30px rgba(0,0,0,0.35);"
-    ].join("");
-    box.innerHTML = [
-      "<div style='display:flex;justify-content:space-between;align-items:center;'>",
-      "  <span style='font-size:15px;font-weight:800;'>📱 홈화면에 추가하기</span>",
-      "  <button onclick=\"document.getElementById('iosInstallGuide').remove()\" style='border:0;background:transparent;color:#94a3b8;font-size:20px;cursor:pointer;'>✕</button>",
-      "</div>",
-      "<div style='font-size:13px;color:#cbd5e1;line-height:1.6;'>",
-      "  <b>Safari</b>에서 아래 버튼을 탭하세요:<br>",
-      "  <span style='font-size:16px;'>⬆️</span> <b>공유 버튼</b> → <b>홈 화면에 추가</b>",
-      "</div>",
+      "<div style='height:1px;background:rgba(255,255,255,0.1);'></div>",
+      stepsHtml,
       "<div style='display:flex;justify-content:center;margin-top:4px;'>",
       "  <div style='width:40px;height:4px;border-radius:2px;background:#475569;'></div>",
       "</div>"
     ].join("");
-    document.body.appendChild(box);
+
+    overlay.appendChild(box);
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
+  }
+
+  function showGenericInstallGuide() {
+    var isAndroid = /android/i.test(navigator.userAgent);
+
+    if (isAndroid) {
+      _makeGuideBox("androidInstallGuide", [
+        "화면 오른쪽 위 <b>점 세 개 메뉴(⋮)</b>를 탭하세요.",
+        "<b>'홈 화면에 추가'</b> 또는 <b>'앱 설치'</b>를 탭하세요.",
+        "확인 팝업에서 <b>'추가'</b>를 탭하면 완료!<br><span style='color:#94a3b8;font-size:12px;'>홈 화면에 마이메신저 아이콘이 생깁니다.</span>"
+      ]);
+    } else {
+      // PC Chrome
+      _makeGuideBox("pcInstallGuide", [
+        "Chrome 주소창 오른쪽 끝 <b>⊕ 아이콘</b>을 클릭하세요.<br><span style='color:#94a3b8;font-size:12px;'>(아이콘이 없으면 아직 설치 조건 미충족 — 잠시 후 다시 시도)</span>",
+        "<b>'마이메신저 설치'</b>를 클릭하세요.",
+        "<b>'설치'</b> 버튼을 클릭하면 완료!<br><span style='color:#94a3b8;font-size:12px;'>바탕화면과 작업표시줄에 아이콘이 생깁니다.</span>"
+      ]);
+    }
+  }
+
+  /* iOS Safari 설치 안내 */
+  function showIosInstallGuide() {
+    _makeGuideBox("iosInstallGuide", [
+      "<b>Safari</b> 브라우저로 접속하세요.<br><span style='color:#94a3b8;font-size:12px;'>Chrome, 카카오 브라우저 등에서는 홈화면 추가가 안 됩니다.</span>",
+      "화면 하단 가운데 <b>공유 버튼 ⎋</b> 을 탭하세요.<br><span style='color:#94a3b8;font-size:12px;'>(네모 위에 화살표 모양 아이콘)</span>",
+      "스크롤을 내려 <b>'홈 화면에 추가'</b>를 탭하세요.",
+      "오른쪽 위 <b>'추가'</b>를 탭하면 완료!<br><span style='color:#94a3b8;font-size:12px;'>홈 화면에 마이메신저 아이콘이 생깁니다.</span>"
+    ]);
   }
 
   /* ── 앱 배지 (미확인 메시지 수) ── */
