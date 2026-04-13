@@ -3,26 +3,23 @@
     ".read": false,
     ".write": false,
     "socialChatRooms": {
-      "$roomId": {
-        "$msgId": { ".read": true, ".write": true }
-      }
+      "$roomId": { "$msgId": { ".read": true, ".write": true } }
     },
     "signals": {
-      "$roomId": {
-        "$signalId": { ".read": true, ".write": true }
-      }
+      "$roomId": { "$signalId": { ".read": true, ".write": true } }
     },
     "messages": {
       "$roomId": {
         ".read": true,
-        ".write": true
+        ".write": true,
+        ".indexOn": ["ts"]
       }
     },
     "profiles": {
-      "$nickname": {
-        ".read": true,
-        ".write": true
-      }
+      "$nickname": { ".read": true, ".write": true }
+    },
+    "rooms": {
+      "$roomId": { ".read": true, ".write": true }
     }
   }
 }

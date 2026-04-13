@@ -546,6 +546,18 @@
   }
 
   function loadRooms() {
+    // Firebase에서 먼저 빠르게 렌더 (캐시 역할)
+    if (window.FirebaseRooms && typeof window.FirebaseRooms.loadRoomsFromFirebase === "function") {
+      window.FirebaseRooms.loadRoomsFromFirebase().then(function (fbRooms) {
+        if (fbRooms && fbRooms.length > 0) {
+          var merged = normalizeRooms(fbRooms);
+          rooms = merged;
+          render(); // Firebase 데이터로 즉시 표시
+        }
+      }).catch(function () {});
+    }
+
+    // 시트 API로 정확한 데이터 갱신 (백그라운드)
     return api({
       mode: "social_rooms",
       nickname: safeNick()
@@ -553,10 +565,15 @@
       if (!json || !json.ok) throw new Error("rooms api fail");
       rooms = normalizeRooms(json.rooms || []);
 
+      // 시트에서 받은 방 목록을 Firebase에 동기화 (다음 로딩 시 빠르게)
+      try {
+        if (window.FirebaseRooms) window.FirebaseRooms.syncRoomsToFirebase(json.rooms || []);
+      } catch (eFbSync) {}
+
       // 방문 기록은 현재 목록 기준으로 정리(삭제된 방 구독 방지)
       pruneVisitedAgainstRooms(rooms);
 
-      // 방 목록 캐시(localStorage): 패널이 닫혀 있어도 signals 구독/표시용으로 사용
+      // 방 목록 캐시(localStorage)
       try {
         var slim = (rooms || []).map(function (r) {
           if (!r) return null;
@@ -575,21 +592,19 @@
         localStorage.setItem(LS_ROOMS_CACHE, JSON.stringify({ ts: Date.now(), rooms: slim }));
       } catch (eCache) {}
 
-      // signals 구독 대상(내 소속 방들) 갱신
+      // signals 구독 대상 갱신
       try {
         if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
           window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []), "rooms-panel");
         }
       } catch (e) {}
 
-      // 현재 활성 방은 유지(목록 갱신으로 사라진 경우만 비우기)
       var prev = activeRoomId;
       var exists = activeRoomId ? rooms.some(function (r) { return r && r.room_id === activeRoomId; }) : false;
       if (!exists) {
         activeRoomId = null;
         try { localStorage.removeItem(LS_ACTIVE_ID); localStorage.removeItem(LS_ACTIVE_NAME); } catch (e0) {}
       } else {
-        // 활성 방 이름 갱신(표시용)
         try {
           var ar = getActiveRoom();
           if (ar && ar.name) localStorage.setItem(LS_ACTIVE_NAME, String(ar.name));
@@ -598,7 +613,6 @@
 
       render();
 
-      // 활성 방이 바뀐 경우에만 콜백(불필요한 방 이동/메시지 로딩 방지)
       try {
         if (prev !== activeRoomId && typeof window.__onRoomChanged === "function") {
           window.__onRoomChanged(activeRoomId, getActiveRoom());
@@ -606,7 +620,6 @@
       } catch (e2) {}
       return rooms;
     }).catch(function () {
-      // 서버 미지원 시: 방 목록 비움
       var prev = activeRoomId;
       rooms = normalizeRooms([]);
       activeRoomId = null;

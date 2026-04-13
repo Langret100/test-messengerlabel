@@ -109,7 +109,8 @@
       body.append("mode",     "social_upload_image");
       body.append("mime",     mime);
       body.append("data",     base64);
-      body.append("user_id",  nickname);
+      // user_id는 실제 user_id 사용 (없으면 빈값 - Apps Script가 허용하는 형태)
+      body.append("user_id",  (window.currentUser && window.currentUser.user_id) ? String(window.currentUser.user_id) : "");
       body.append("nickname", nickname);
       body.append("ts",       String(Date.now()));
 
