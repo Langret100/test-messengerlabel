@@ -105,7 +105,7 @@
         if (m) mime = m[1];
       }
 
-      var body = new FormData();
+      var body = new URLSearchParams();
       body.append("mode",     "social_upload_image");
       body.append("mime",     mime);
       body.append("data",     base64);
@@ -113,7 +113,11 @@
       body.append("nickname", nickname);
       body.append("ts",       String(Date.now()));
 
-      fetch(uploadUrl, { method: "POST", body: body })
+      fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: body.toString()
+      })
         .then(function (res) { return res.json(); })
         .then(function (json) {
           var url = (json && (json.url || json.image_url)) || "";
@@ -224,10 +228,11 @@
       "<input id='pmBgInput' type='file' accept='image/*' style='display:none'></div>",
       "<button id='pmSave' type='button' style='border:0;background:#2563eb;color:#fff;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;'>저장</button>",
       "<div id='pmStatus' style='font-size:12px;color:#6b7280;text-align:center;min-height:16px;'></div>",
-      /* PWA 설치 버튼 */
-      "<button id='pwaInstallBtn' type='button' style='border:1px solid #16a34a;background:#f0fdf4;color:#16a34a;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;'>",
-      "  <span>📱</span> <span>바탕화면에 앱 추가</span>",
-      "</button>"
+      /* 하단 버튼 행: 웹앱 추가 + 로그아웃 */
+      "<div style='display:flex;gap:8px;'>",
+      "  <button id='pwaInstallBtn' type='button' style='flex:1;border:1px solid #16a34a;background:#f0fdf4;color:#16a34a;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;'>📱 바탕화면에 추가</button>",
+      "  <button id='pmLogoutBtn' type='button' style='flex:0 0 auto;border:1px solid #fca5a5;background:#fff1f2;color:#dc2626;border-radius:12px;height:38px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;'>로그아웃</button>",
+      "</div>"
     ].join("");
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -306,29 +311,46 @@
     /* PWA 설치 버튼 */
     var pwaBtn = document.getElementById("pwaInstallBtn");
     if (pwaBtn) {
-      // 설치 가능 여부에 따라 표시 여부 결정
-      if (!window.PwaManager || !window.PwaManager.canInstall()) {
-        // iOS Safari나 이미 설치된 경우에도 버튼 표시 (안내 제공)
-        var isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
-        var isStandalone = window.matchMedia("(display-mode: standalone)").matches;
-        if (isStandalone) {
-          pwaBtn.style.display = "none"; // 이미 설치됨
-        } else if (!isIos) {
-          pwaBtn.style.opacity = "0.5";
-          pwaBtn.title = "브라우저가 자동 설치를 지원하지 않으면 브라우저 메뉴 → '홈 화면에 추가'를 이용해주세요.";
-        }
+      var isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
+                         window.navigator.standalone === true;
+      if (isStandalone) {
+        pwaBtn.textContent = "✅ 이미 설치됨";
+        pwaBtn.disabled = true;
+        pwaBtn.style.opacity = "0.5";
       }
       pwaBtn.addEventListener("click", function () {
         if (window.PwaManager) {
           window.PwaManager.install().then(function (result) {
             if (result === "accepted") {
-              pwaBtn.textContent = "✅ 앱 설치 완료!";
-              pwaBtn.style.background = "#dcfce7";
-              setTimeout(close, 1200);
-            } else if (result === "ios_guide") {
-              // iOS 안내는 PwaManager 내부에서 처리
+              pwaBtn.textContent = "✅ 설치 완료!";
+              pwaBtn.disabled = true;
             }
+            // ios_guide, not_available 등은 PwaManager 내부에서 처리
           });
+        }
+      });
+    }
+
+    /* 로그아웃 버튼 */
+    var logoutBtn = document.getElementById("pmLogoutBtn");
+    if (logoutBtn) {
+      logoutBtn.addEventListener("click", function () {
+        if (confirm("로그아웃 하시겠어요?")) {
+          try {
+            // login.js의 logoutGhostUser 사용
+            if (typeof window.logoutGhostUser === "function") {
+              window.logoutGhostUser();
+            } else {
+              localStorage.removeItem("ghostUser");
+              window.currentUser = null;
+              window.__loginConfirmed = false;
+            }
+          } catch (e) {}
+          close();
+          // 로그인 패널 열기
+          setTimeout(function () {
+            if (typeof window.openLoginPanel === "function") window.openLoginPanel();
+          }, 200);
         }
       });
     }

@@ -147,13 +147,33 @@
     var out = Array.isArray(list) ? list.slice() : [];
     out = ensureGlobalRoom(out);
 
-    // 이름 기준 정렬(단, global은 항상 맨 위)
+    // 정렬: global 항상 맨 위 → 미확인 있는 방 → 최근 방문 순
     out.sort(function (a, b) {
       var ag = a && (a.is_global || String(a.room_id || "") === "global");
       var bg = b && (b.is_global || String(b.room_id || "") === "global");
       if (ag && !bg) return -1;
       if (!ag && bg) return 1;
       if (!a || !b) return 0;
+
+      // 미확인(unread) 있는 방 우선
+      var aUnread = 0, bUnread = 0;
+      try {
+        var counts = JSON.parse(localStorage.getItem("ghostUnreadCounts_v1") || "{}");
+        aUnread = counts[String(a.room_id || "")] || 0;
+        bUnread = counts[String(b.room_id || "")] || 0;
+      } catch(e) {}
+      if (aUnread > 0 && bUnread === 0) return -1;
+      if (aUnread === 0 && bUnread > 0) return 1;
+
+      // 최근 방문한 방 우선
+      var aTs = 0, bTs = 0;
+      try {
+        var visited = JSON.parse(localStorage.getItem("ghostRoomVisited_v1") || "{}");
+        aTs = visited[String(a.room_id || "")] || 0;
+        bTs = visited[String(b.room_id || "")] || 0;
+      } catch(e) {}
+      if (aTs !== bTs) return bTs - aTs; // 최근 방문 내림차순
+
       return (String(a.name || "")).localeCompare(String(b.name || ""), "ko");
     });
     return out;

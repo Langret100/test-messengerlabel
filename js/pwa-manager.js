@@ -37,19 +37,57 @@
 
   /* ── 홈화면 추가 요청 ── */
   function install() {
-    if (!deferredPrompt) {
-      // iOS Safari: 직접 안내 (beforeinstallprompt 없음)
-      if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
-        showIosInstallGuide();
-        return Promise.resolve("ios_guide");
-      }
-      return Promise.resolve("not_available");
+    // Android Chrome: beforeinstallprompt 사용
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      return deferredPrompt.userChoice.then(function (result) {
+        deferredPrompt = null;
+        return result.outcome; // "accepted" | "dismissed"
+      });
     }
-    deferredPrompt.prompt();
-    return deferredPrompt.userChoice.then(function (result) {
-      deferredPrompt = null;
-      return result.outcome; // "accepted" | "dismissed"
-    });
+
+    // iOS Safari
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+      showIosInstallGuide();
+      return Promise.resolve("ios_guide");
+    }
+
+    // Android 기타 / Chrome (beforeinstallprompt 아직 안 왔을 때)
+    // 브라우저 메뉴 안내
+    showGenericInstallGuide();
+    return Promise.resolve("guide_shown");
+  }
+
+  /* 일반 브라우저 설치 안내 */
+  function showGenericInstallGuide() {
+    var existing = document.getElementById("genericInstallGuide");
+    if (existing) { existing.style.display = "flex"; return; }
+
+    var box = document.createElement("div");
+    box.id = "genericInstallGuide";
+    box.style.cssText = [
+      "position:fixed;bottom:0;left:0;right:0;z-index:9999;",
+      "background:#1e293b;color:#fff;padding:16px 20px 28px;",
+      "border-radius:20px 20px 0 0;display:flex;flex-direction:column;gap:10px;",
+      "box-shadow:0 -4px 30px rgba(0,0,0,0.35);"
+    ].join("");
+
+    var isAndroid = /android/i.test(navigator.userAgent);
+    var guide = isAndroid
+      ? "Chrome 메뉴(⋮) → <b>홈 화면에 추가</b>"
+      : "브라우저 메뉴 → <b>홈 화면에 추가</b> 또는 <b>앱 설치</b>";
+
+    box.innerHTML = [
+      "<div style='display:flex;justify-content:space-between;align-items:center;'>",
+      "  <span style='font-size:15px;font-weight:800;'>📱 홈화면에 추가하기</span>",
+      "  <button onclick=\"document.getElementById('genericInstallGuide').remove()\" style='border:0;background:transparent;color:#94a3b8;font-size:20px;cursor:pointer;'>✕</button>",
+      "</div>",
+      "<div style='font-size:13px;color:#cbd5e1;line-height:1.7;'>" + guide + "</div>",
+      "<div style='display:flex;justify-content:center;'>",
+      "  <div style='width:40px;height:4px;border-radius:2px;background:#475569;'></div>",
+      "</div>"
+    ].join("");
+    document.body.appendChild(box);
   }
 
   /* iOS Safari 설치 안내 */

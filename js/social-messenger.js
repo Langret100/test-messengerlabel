@@ -1605,13 +1605,18 @@ function scheduleRoomRefresh(roomId) {
           type:     "text",
           ts:       now,
           room_id:  currentRoomId || ""
+        }).then(function () {
+          console.log("[Firebase] 메시지 저장 성공 →", __fbPath);
         }).catch(function (e) {
-          console.warn("[messenger] Firebase 텍스트 저장 실패:", e.message || e);
+          console.warn("[Firebase] 메시지 저장 실패:", e.message || e);
         });
-        // 30일 이전 메시지 청소 (가끔)
         __pruneOldFirebaseMessages(currentRoomId);
+      } else {
+        console.warn("[Firebase] DB 없음 - ensureFirebase() 실패");
       }
-    } catch (eFbSave) {}
+    } catch (eFbSave) {
+      console.warn("[Firebase] 저장 예외:", eFbSave);
+    }
 
     // 1) 시트에 기록 (백업 저장소)
     try {
