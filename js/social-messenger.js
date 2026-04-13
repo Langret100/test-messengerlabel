@@ -563,98 +563,101 @@ var NotifySetting = (function () {
     if (!__fbDb3 || !__fbPath3) return;
 
     var subStartTs = Date.now();
-    var initialLoadDone = false;  // 초기 배치 로딩 완료 여부
-    var batchQueue = [];          // 초기 로딩 중 쌓이는 메시지 버퍼
-    var batchTimer = null;
+    var q = __fbDb3.ref(__fbPath3).orderByChild("ts").limitToLast(100);
 
-    // 초기 배치 플러시 - 한 번에 renderAll
-    function flushBatch() {
-      if (batchQueue.length === 0) return;
-      // 중복 제거 후 messages에 추가
-      batchQueue.forEach(function (msg) {
-        var dup = false;
-        for (var i = 0; i < messages.length; i++) {
-          if (messages[i] && (messages[i].key === msg.key || messages[i].mid === msg.mid)) { dup = true; break; }
-        }
-        if (!dup) messages.push(msg);
-      });
-      batchQueue = [];
-      messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
-      if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
-      renderAll(); // 한 번만 전체 렌더
-      initialLoadDone = true;
-    }
+    // ── 1단계: once("value")로 초기 메시지 전체를 한 번에 로딩 ──
+    q.once("value").then(function (snap) {
+      if (currentRoomId !== roomId) return; // 방 바뀌면 무시
 
-    // 300ms 동안 추가 메시지 없으면 배치 완료로 간주 (충분한 여유)
-    function scheduleBatchFlush() {
-      clearTimeout(batchTimer);
-      batchTimer = setTimeout(function () {
-        flushBatch();
-      }, 300);
-    }
-
-    try {
-      var q = __fbDb3.ref(__fbPath3).orderByChild("ts").limitToLast(100);
-      var handler = function (snap) {
-        try {
-          if (currentRoomId !== roomId) return;
-          var val = snap.val();
+      if (snap.exists()) {
+        var newMsgs = [];
+        snap.forEach(function (child) {
+          var val = child.val();
           if (!val) return;
-
-          var mid = val.mid || snap.key;
-          // 이미 있는 메시지 중복 방지
+          // 중복 체크
           for (var i = 0; i < messages.length; i++) {
-            if (messages[i] && (messages[i].key === snap.key || messages[i].mid === mid)) return;
+            if (messages[i] && (messages[i].key === child.key)) return;
           }
-
-          var isNewMsg = initialLoadDone && (Number(val.ts || 0) > subStartTs);
-
           var msg = {
-            key:       snap.key,
-            mid:       mid,
+            key:       child.key,
+            mid:       val.mid || child.key,
             user_id:   val.user_id  || "",
             nickname:  val.nickname || "익명",
             text:      val.text     || "",
-            type:      val.type     || "text",
+            type:      val.type === "photo" ? "image" : (val.type || "text"),
             image_url: val.url || val.image_url || "",
             file_url:  val.url || val.file_url  || "",
             file_name: val.fileName || val.file_name || "",
             ts:        val.ts || Date.now(),
             room_id:   roomId,
             _firebase: true,
-            _isNew:    isNewMsg
+            _isNew:    false
+          };
+          newMsgs.push(msg);
+        });
+
+        if (newMsgs.length > 0) {
+          messages = messages.concat(newMsgs);
+          messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
+          if (messages.length > MAX_BUFFER * 2) messages.splice(0, messages.length - MAX_BUFFER * 2);
+          renderAll(); // 한 번만 전체 렌더
+        }
+      }
+
+      // ── 2단계: 이후 새 메시지만 child_added로 실시간 수신 ──
+      var newMsgHandler = function (snap2) {
+        try {
+          if (currentRoomId !== roomId) return;
+          var val2 = snap2.val();
+          if (!val2) return;
+
+          // 이미 있으면 스킵
+          for (var i = 0; i < messages.length; i++) {
+            if (messages[i] && messages[i].key === snap2.key) return;
+          }
+
+          // once("value") 이후 시점의 메시지만 처리
+          if (Number(val2.ts || 0) <= subStartTs) return;
+
+          var msg2 = {
+            key:       snap2.key,
+            mid:       val2.mid || snap2.key,
+            user_id:   val2.user_id  || "",
+            nickname:  val2.nickname || "익명",
+            text:      val2.text     || "",
+            type:      val2.type === "photo" ? "image" : (val2.type || "text"),
+            image_url: val2.url || val2.image_url || "",
+            file_url:  val2.url || val2.file_url  || "",
+            file_name: val2.fileName || val2.file_name || "",
+            ts:        val2.ts || Date.now(),
+            room_id:   roomId,
+            _firebase: true,
+            _isNew:    true
           };
 
-          if (msg.type === "photo") msg.type = "image";
+          messages.push(msg2);
+          messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
+          appendNewMessage(msg2);
 
-          if (!initialLoadDone) {
-            // 초기 로딩: 버퍼에 쌓아두고 배치 플러시
-            batchQueue.push(msg);
-            scheduleBatchFlush();
-          } else {
-            // 실시간 새 메시지: append only (전체 재렌더 없음)
-            messages.push(msg);
-            messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
-            appendNewMessage(msg);
-
-            // 미확인 배지
-            try {
-              if (window.PwaManager && msg._isNew) {
-                window.PwaManager.incrementUnread(roomId);
-              }
-            } catch (eBadge) {}
-          }
+          // 미확인 배지
+          try {
+            if (window.PwaManager) window.PwaManager.incrementUnread(roomId);
+          } catch (eBadge) {}
         } catch (e) {}
       };
-      q.on("child_added", handler);
-      __fbMsgSub = { ref: q, handler: handler };
+
+      // child_added는 startAfter 없이 쓰면 기존 데이터도 발화하므로
+      // ts > subStartTs 조건으로 새 메시지만 처리
+      var liveQ = __fbDb3.ref(__fbPath3).orderByChild("ts").startAt(subStartTs + 1);
+      liveQ.on("child_added", newMsgHandler);
+      __fbMsgSub = { ref: liveQ, handler: newMsgHandler };
 
       // 30일 청소
       setTimeout(function () { __pruneOldFirebaseMessages(roomId); }, 3000);
 
-    } catch (e2) {
-      console.warn("[messenger] Firebase 구독 실패:", e2.message || e2);
-    }
+    }).catch(function (e) {
+      console.warn("[Firebase] 초기 로딩 실패:", e.message || e);
+    });
   }
 
   function stopListen() {
