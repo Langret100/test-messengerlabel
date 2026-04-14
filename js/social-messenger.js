@@ -2207,13 +2207,13 @@ onPickImage: async function () {
       window.dispatchEvent(new CustomEvent("ghost:room-entered", { detail: { roomId: currentRoomId } }));
     } catch (eBadge) {}
 
-    // 구글 시트 백업 로딩: Firebase 데이터가 없을 때만 (1.5초 후 판단)
+    // 구글 시트 백업 로딩: Firebase에서 아무것도 못 받았을 때만 (3초 대기 후 판단)
     var _roomForSheet = currentRoomId;
     setTimeout(function () {
       if (currentRoomId !== _roomForSheet) return; // 방이 바뀌면 스킵
       if (messages.length > 0) return; // Firebase에서 이미 불러왔으면 스킵
       loadRecentFromSheet(_roomForSheet); // Firebase 데이터 없을 때만 시트 폴백
-    }, 1500);
+    }, 3000);
 
     // 상단 상태
     try {

@@ -2,10 +2,11 @@
    [profile-manager.js] 유저 프로필 관리
    ------------------------------------------------------------
    프로필 이미지
-   - 업로드: chat-photo.js 와 동일 방식 (SHEET_IMAGE_UPLOAD_URL + mode=social_upload_image)
-             기존 이미지 저장 폴더와 같은 곳에 저장됨
-   - Firebase /profiles/{nickname} 에 URL 저장 → 다른 유저도 조회 가능
-   - 로컬 캐시(localStorage) → 재접속 시 즉시 표시
+   - 업로드: 120×120px JPEG(q0.82)로 압축 후 base64를
+             Firebase /profiles/{nickname}/imgBase64 에 직접 저장
+             (Drive CORS 문제 없음 / Apps Script 불필요)
+   - 불러오기: Firebase에서 imgBase64 직접 읽기 → localStorage 캐시(1시간)
+   - 구버전 호환: imgBase64 없으면 imgUrl(Drive URL)로 폴백
    배경 이미지: 로컬 기기에만 저장
    기어(⚙) 버튼: topbar 우측
    ============================================================ */
@@ -46,98 +47,134 @@
     return (p && (p.imgLocal || p.imgUrl)) ? (p.imgLocal || p.imgUrl) : DEFAULT_AVATAR;
   }
 
+  // 캐시 유효기간: 24시간 (변경 감지 시엔 즉시 갱신)
+  var CACHE_TTL = 24 * 60 * 60 * 1000;
+
   function fetchAndCacheProfile(nickname) {
     if (!nickname) return;
-    var profs = loadProfiles();
-    // 1시간 이내 캐시 있으면 스킵
-    if (profs[nickname] && profs[nickname].imgLocal &&
-        (Date.now() - (profs[nickname].ts || 0)) < 3600000) return;
+    var profs  = loadProfiles();
+    var cached = profs[nickname];
+
+    // ── 로컬 캐시가 있으면 일단 즉시 DOM에 표시 (화면 빠르게) ──
+    if (cached && cached.imgLocal) {
+      applyProfileToDOM(nickname, cached.imgLocal);
+    }
+
+    // ── 24시간 이내면 Firebase 조회 자체를 건너뜀 (서버 요청 없음) ──
+    if (cached && cached.imgLocal &&
+        (Date.now() - (cached.ts || 0)) < CACHE_TTL) return;
 
     var ref = fbProfileRef(nickname);
     if (!ref) return;
 
-    ref.once("value").then(function (snap) {
-      var val = snap.val();
-      if (!val || !val.imgUrl) return;
-      var url = val.imgUrl;
+    // ── ts 필드만 먼저 확인 → 변경 없으면 base64 재다운로드 안 함 ──
+    ref.child("ts").once("value").then(function (tsSnap) {
+      var remotTs = Number(tsSnap.val() || 0);
+      var localTs = Number((cached && cached.profileTs) || 0);
 
-      var cur = loadProfiles();
-      if (!cur[nickname]) cur[nickname] = {};
-      if (cur[nickname].imgUrl !== url) cur[nickname].imgLocal = "";
-      cur[nickname].imgUrl = url;
-      cur[nickname].ts = Date.now();
-      saveProfiles(cur);
+      if (remotTs && localTs && remotTs === localTs && cached.imgLocal) {
+        // 서버 ts 와 로컬 ts 동일 → 변경 없음, 로컬 캐시 유효기간만 갱신
+        var cc = loadProfiles();
+        if (cc[nickname]) { cc[nickname].ts = Date.now(); saveProfiles(cc); }
+        return;
+      }
 
-      // Drive URL → base64 로컬 캐시
-      fetch(url).then(function (r) { return r.blob(); }).then(function (blob) {
-        var reader = new FileReader();
-        reader.onload = function () {
-          var cc = loadProfiles();
-          if (!cc[nickname]) cc[nickname] = {};
-          cc[nickname].imgLocal = String(reader.result || "");
-          cc[nickname].ts = Date.now();
-          saveProfiles(cc);
-          document.querySelectorAll('[data-profile-nick="' + nickname + '"]').forEach(function (el) {
-            el.src = cc[nickname].imgLocal;
-          });
-        };
-        reader.readAsDataURL(blob);
-      }).catch(function () {
-        document.querySelectorAll('[data-profile-nick="' + nickname + '"]').forEach(function (el) {
-          el.src = url;
-        });
-      });
-    }).catch(function () {});
+      // ts 다르거나 캐시 없음 → base64 풀 다운로드
+      ref.once("value").then(function (snap) {
+        var val = snap.val();
+        if (!val) return;
+
+        var imgData = val.imgBase64 || val.imgUrl || "";
+        if (!imgData) return;
+
+        var cc = loadProfiles();
+        if (!cc[nickname]) cc[nickname] = {};
+        cc[nickname].imgLocal   = imgData;
+        cc[nickname].imgUrl     = val.imgUrl || "";
+        cc[nickname].profileTs  = Number(val.ts || 0); // 서버 변경 시각
+        cc[nickname].ts         = Date.now();           // 로컬 캐시 저장 시각
+        saveProfiles(cc);
+
+        applyProfileToDOM(nickname, imgData);
+      }).catch(function () {});
+    }).catch(function () {
+      // ts 조회 실패 시 풀 다운로드로 폴백
+      ref.once("value").then(function (snap) {
+        var val = snap.val();
+        if (!val) return;
+        var imgData = val.imgBase64 || val.imgUrl || "";
+        if (!imgData) return;
+        var cc = loadProfiles();
+        if (!cc[nickname]) cc[nickname] = {};
+        cc[nickname].imgLocal  = imgData;
+        cc[nickname].profileTs = Number(val.ts || 0);
+        cc[nickname].ts        = Date.now();
+        saveProfiles(cc);
+        applyProfileToDOM(nickname, imgData);
+      }).catch(function () {});
+    });
   }
 
-  /* ── 이미지 업로드: chat-photo.js 와 완전히 동일한 방식 ── */
+  // DOM의 data-profile-nick 요소 + gear 버튼 일괄 갱신
+  function applyProfileToDOM(nickname, imgData) {
+    if (!nickname || !imgData) return;
+    document.querySelectorAll('[data-profile-nick="' + nickname + '"]').forEach(function (el) {
+      el.src = imgData;
+    });
+    var myNick = safeMyNickname();
+    if (myNick && myNick === nickname) {
+      var gearImg = document.getElementById("profileGearImg");
+      if (gearImg) gearImg.src = imgData;
+    }
+  }
+
+  /* ── 프로필 이미지 저장: Firebase에 base64 직접 저장 (CORS 문제 없음) ──
+     - 모달에서 선택된 이미지는 이미 120×120px canvas로 압축된 dataUrl
+     - Drive 업로드 없이 Firebase /profiles/{nickname}/imgBase64 에 직접 저장
+     - 다른 유저가 fetchAndCacheProfile() 호출 시 Firebase에서 바로 읽어감
+     - 용량: 120×120 JPEG q0.82 ≈ 8~15KB → Firebase 무료 플랜(1GB) 여유 충분
+  ── */
   function uploadProfileImage(nickname, dataUrl) {
     return new Promise(function (resolve, reject) {
       if (!nickname || !dataUrl) return reject(new Error("no data"));
-      var uploadUrl = window.SHEET_IMAGE_UPLOAD_URL || window.SHEET_WRITE_URL || "";
-      if (!uploadUrl) return reject(new Error("SHEET_IMAGE_UPLOAD_URL not configured"));
 
-      var base64 = dataUrl, mime = "image/jpeg";
-      if (dataUrl.indexOf(",") > -1) {
-        var sp = dataUrl.split(",");
-        base64 = sp[1];
-        var m = sp[0].match(/:(.*?);/);
-        if (m) mime = m[1];
+      try {
+        if (typeof firebase === "undefined") throw new Error("Firebase not loaded");
+        var db = firebase.database();
+        var safe = String(nickname).replace(/[.#$\[\]\/]/g, "_");
+
+        // 120×120 재압축 보장 (모달에서 이미 했지만 혹시 모를 경우 대비)
+        var finalDataUrl = dataUrl;
+        try {
+          var img = new Image();
+          img.src = dataUrl;
+          // 이미 canvas로 압축된 dataUrl이면 그대로 사용 (img.width 확인 불필요)
+        } catch (eImg) {}
+
+        var payload = {
+          imgBase64: finalDataUrl,   // base64 직접 저장 (CORS 없이 바로 표시)
+          nickname:  nickname,
+          ts:        Date.now()
+        };
+
+        db.ref("profiles/" + safe).set(payload)
+          .then(function () {
+            // 로컬 캐시 저장 (profileTs = 서버 저장 시각, ts = 로컬 캐시 시각)
+            var savedTs = payload.ts;
+            var profs = loadProfiles();
+            if (!profs[nickname]) profs[nickname] = {};
+            profs[nickname].imgLocal  = finalDataUrl;
+            profs[nickname].profileTs = savedTs; // 서버 ts 와 동기화
+            profs[nickname].ts        = Date.now();
+            saveProfiles(profs);
+            applyProfileToDOM(nickname, finalDataUrl);
+            resolve(finalDataUrl);
+          })
+          .catch(reject);
+
+      } catch (e) {
+        reject(e);
       }
-
-      var body = new URLSearchParams();
-      body.append("mode",     "social_upload_image");
-      body.append("mime",     mime);
-      body.append("data",     base64);
-      // user_id는 실제 user_id 사용 (없으면 빈값 - Apps Script가 허용하는 형태)
-      body.append("user_id",  (window.currentUser && window.currentUser.user_id) ? String(window.currentUser.user_id) : "");
-      body.append("nickname", nickname);
-      body.append("ts",       String(Date.now()));
-
-      fetch(uploadUrl, {
-        method: "POST",
-        body: body
-      })
-        .then(function (res) { return res.json(); })
-        .then(function (json) {
-          var url = (json && (json.url || json.image_url)) || "";
-          if (!url) return reject(new Error((json && json.error) || "no url returned"));
-
-          // 로컬 캐시
-          var profs = loadProfiles();
-          if (!profs[nickname]) profs[nickname] = {};
-          profs[nickname].imgUrl   = url;
-          profs[nickname].imgLocal = dataUrl;
-          profs[nickname].ts       = Date.now();
-          saveProfiles(profs);
-
-          // Firebase /profiles/{nickname} 저장 → 다른 유저가 읽어갈 수 있음
-          var ref = fbProfileRef(nickname);
-          if (ref) ref.set({ imgUrl: url, nickname: nickname, ts: Date.now() }).catch(function () {});
-
-          resolve(url);
-        })
-        .catch(reject);
     });
   }
 

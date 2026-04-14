@@ -606,11 +606,9 @@ try {
         db: firebaseDb,
         getMyId: function () { return getSafeUserId(); },
         onSignal: function (info) {
-          try {
-            if (!socialChatMode) return;
-            if (!info || info.roomId !== "global") return;
-            loadRecentMessagesFromSheet(false);
-          } catch (e0) {}
+          // ※ 소통 채팅 메시지는 Firebase child_added(startListening)로 실시간 수신 중
+          //    onSignal에서 시트를 추가로 읽으면 느려지므로 제거
+          //    시트는 setModeSocial(true) 최초 진입 시 1회만 로드
         },
         onNotify: function () {}
       });

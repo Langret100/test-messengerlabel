@@ -101,3 +101,73 @@ function getOrCreateFolder(name) {
  * ※ 실제 서비스는 auth 조건을 강화하세요.
  * ============================================================
  */
+
+/**
+ * ============================================================
+ * [추가 패치] get_image_base64 모드 — Google Drive 이미지 프록시
+ * ============================================================
+ * 브라우저에서 Drive URL(drive.google.com/uc?...)을 fetch하면
+ * CORS 정책으로 차단되어 "액세스 거부" 오류가 납니다.
+ * 이 핸들러를 doGet(e)에 추가하면 Apps Script가 서버 측에서
+ * Drive 이미지를 읽어 base64로 반환하므로 CORS 문제가 해소됩니다.
+ *
+ * 프론트엔드 호출 방식:
+ *   GET {SHEET_IMAGE_UPLOAD_URL}?mode=get_image_base64&url=<encoded_drive_url>
+ *
+ * 사용처: js/profile-manager.js → fetchAndCacheProfile()
+ * ============================================================
+ */
+
+// doGet(e) 내부에 추가:
+
+// === doGet 전체 예시 (없으면 신규 추가, 있으면 case만 병합) ===
+/*
+function doGet(e) {
+  var params = e.parameter || {};
+  var mode   = params.mode || "";
+  if (mode === "get_image_base64") {
+    return handleGetImageBase64(params);
+  }
+  // ... 기존 doGet 로직 ...
+}
+*/
+
+function handleGetImageBase64(params) {
+  try {
+    var url = params.url || "";
+    if (!url) {
+      return jsonResponse({ ok: false, error: "no url" });
+    }
+
+    // Drive fileId 추출 (uc?export=view&id=XXX 또는 /d/XXX/view 형태 모두 지원)
+    var fileId = "";
+    var m1 = url.match(/[?&]id=([a-zA-Z0-9_\-]+)/);
+    if (m1) {
+      fileId = m1[1];
+    } else {
+      var m2 = url.match(/\/d\/([a-zA-Z0-9_\-]+)/);
+      if (m2) fileId = m2[1];
+    }
+
+    if (!fileId) {
+      return jsonResponse({ ok: false, error: "cannot extract fileId from url: " + url });
+    }
+
+    var file = DriveApp.getFileById(fileId);
+    var blob = file.getBlob();
+    var base64 = Utilities.base64Encode(blob.getBytes());
+    var mime   = blob.getContentType() || "image/jpeg";
+
+    return jsonResponse({ ok: true, base64: base64, mime: mime });
+
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e.message || e) });
+  }
+}
+
+// ※ jsonResponse 헬퍼가 이미 있다면 중복 추가 불필요
+// function jsonResponse(obj) {
+//   return ContentService
+//     .createTextOutput(JSON.stringify(obj))
+//     .setMimeType(ContentService.MimeType.JSON);
+// }
