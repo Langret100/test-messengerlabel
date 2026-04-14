@@ -236,12 +236,19 @@
     });
 
     // beforeinstallprompt 캐치 (Android Chrome 등)
+    // ※ 이 이벤트는 페이지 로드 직후 발화하므로 모달이 아직 안 열렸을 수 있음
+    //   → deferredPrompt에 저장해두고 모달 열릴 때 profile-manager.js가 canInstall()로 확인
     window.addEventListener("beforeinstallprompt", function (e) {
       e.preventDefault();
       deferredPrompt = e;
-      // 설치 버튼 활성화
+      // 모달이 이미 열려있으면 버튼 텍스트 즉시 갱신
       var btn = document.getElementById("pwaInstallBtn");
-      if (btn) btn.style.display = "flex";
+      if (btn && !btn.disabled) {
+        btn.textContent = "📲 지금 바로 설치";
+        btn.style.background = "#16a34a";
+        btn.style.color = "#fff";
+        btn.style.border = "1px solid #15803d";
+      }
     });
 
     // 앱 설치 완료

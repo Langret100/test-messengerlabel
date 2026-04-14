@@ -345,26 +345,62 @@
       }
     });
 
-    /* PWA 설치 버튼 */
+    /* PWA 설치 버튼 ─ 모달 열릴 때 실시간 상태 반영 */
     var pwaBtn = document.getElementById("pwaInstallBtn");
     if (pwaBtn) {
-      var isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
-                         window.navigator.standalone === true;
-      if (isStandalone) {
-        pwaBtn.textContent = "✅ 이미 설치됨";
-        pwaBtn.disabled = true;
-        pwaBtn.style.opacity = "0.5";
-      }
-      pwaBtn.addEventListener("click", function () {
-        if (window.PwaManager) {
-          window.PwaManager.install().then(function (result) {
-            if (result === "accepted") {
-              pwaBtn.textContent = "✅ 설치 완료!";
-              pwaBtn.disabled = true;
-            }
-            // ios_guide, not_available 등은 PwaManager 내부에서 처리
-          });
+      // 현재 상태 즉시 반영하는 함수
+      function refreshPwaBtn() {
+        var isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
+                           window.navigator.standalone === true;
+        if (isStandalone) {
+          pwaBtn.textContent = "✅ 이미 설치됨";
+          pwaBtn.disabled = true;
+          pwaBtn.style.opacity = "0.6";
+          pwaBtn.style.cursor = "default";
+          return;
         }
+        // beforeinstallprompt 이미 캐치됨 → 바로 설치 가능
+        if (window.PwaManager && window.PwaManager.canInstall()) {
+          pwaBtn.textContent = "📲 지금 바로 설치";
+          pwaBtn.disabled = false;
+          pwaBtn.style.opacity = "1";
+          pwaBtn.style.background = "#16a34a";
+          pwaBtn.style.color = "#fff";
+          pwaBtn.style.border = "1px solid #15803d";
+          return;
+        }
+        // iOS
+        if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+          pwaBtn.textContent = "📱 홈화면 추가 방법";
+          pwaBtn.disabled = false;
+          pwaBtn.style.opacity = "1";
+          return;
+        }
+        // 아직 prompt 없음 → 안내 표시
+        pwaBtn.textContent = "📱 바탕화면에 추가";
+        pwaBtn.disabled = false;
+        pwaBtn.style.opacity = "1";
+      }
+
+      refreshPwaBtn();
+
+      // beforeinstallprompt가 나중에 발화할 경우 버튼 갱신
+      window.addEventListener("beforeinstallprompt", function () {
+        refreshPwaBtn();
+      });
+
+      pwaBtn.addEventListener("click", function () {
+        if (!window.PwaManager) return;
+        window.PwaManager.install().then(function (result) {
+          if (result === "accepted") {
+            pwaBtn.textContent = "✅ 설치 완료!";
+            pwaBtn.disabled = true;
+            pwaBtn.style.opacity = "0.6";
+          } else if (result === "dismissed") {
+            refreshPwaBtn(); // 거절 시 원래 상태로
+          }
+          // ios_guide / guide_shown 은 PwaManager 내부 팝업이 뜸
+        });
       });
     }
 
