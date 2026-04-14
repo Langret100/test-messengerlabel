@@ -635,9 +635,43 @@ var NotifySetting = (function () {
             _isNew:    true
           };
 
+          // mid 기반 dedup (relay와 공유)
+          var inMid2 = val2.mid || "";
+          if (inMid2 && __hasRelay(inMid2)) return;
+          if (inMid2) __rememberRelay(inMid2);
+
+          // _local 메시지 교체
+          for (var di2 = messages.length - 1; di2 >= 0; di2--) {
+            var mm2 = messages[di2];
+            if (!mm2) continue;
+            if (inMid2 && mm2.mid && mm2.mid === inMid2 && (mm2._local || mm2._relay)) {
+              messages.splice(di2, 1); break;
+            }
+          }
+
           messages.push(msg2);
           messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
           appendNewMessage(msg2);
+
+          // 봤음 갱신
+          try {
+            if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
+              window.SignalBus.markSeenTs(roomId, msg2.ts);
+            }
+          } catch (e0) {}
+
+          // 알림음: 내 글 직후 다른 사람 메시지
+          try {
+            var prevMsg = messages.length > 1 ? messages[messages.length - 2] : null;
+            if (myId && prevMsg && prevMsg.user_id === myId &&
+                msg2.user_id && msg2.user_id !== myId &&
+                (Date.now() - subStartTs) > 1500) {
+              if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
+                NotifySound.playDdiring();
+                if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg2);
+              }
+            }
+          } catch (eSound) {}
 
           // 미확인 배지
           try {
@@ -1369,148 +1403,11 @@ function scheduleRoomRefresh(roomId) {
     return;
   }
 
-  function startListen() {
-    var db0 = ensureFirebase();
-    if (!db0 || !ref) return;
+  // ── startListen: startFirebaseMsgListen으로 완전 통합, 더 이상 사용 안 함 ──
+  // 두 리스너가 동시에 같은 Firebase 경로를 구독해 메시지가 2개씩 렌더되는 문제 수정
+  function startListen() { return; }
 
-    // auth 보장 후 리스너 시작
-    ensureAnonAuth().then(function () {
-      var roomIdNow = currentRoomId;
-      var refNow = ref;
-
-      // 리스너 중복 방지
-      stopListen();
-      listenStartedAt = Date.now();
-
-      var onChildAdded = function (snap) {
-        // 방이 바뀐 뒤 늦게 도착한 이벤트는 무시
-        if (currentRoomId !== roomIdNow) return;
-        var arrivedAt = Date.now();
-        var val = snap.val() || {};
-        // 과거 데이터 호환:
-        // - 일부 클라이언트는 text 대신 message/chatlog/msg 키를 사용했을 수 있음
-        var msgText = (val.text || val.message || val.chatlog || val.msg || "");
-
-        var msg = {
-          key: snap.key,
-          user_id: val.user_id || "",
-          nickname: val.nickname || "익명",
-          text: msgText,
-          type: val.type || "text",
-          image_url: val.image_url || "",
-          file_url: val.file_url || "",
-          file_name: val.file_name || "",
-          file_mime: val.file_mime || "",
-          file_size: val.file_size || 0,
-          ts: val.ts || Date.now(),
-          room_id: val.room_id || roomIdNow
-        };
-
-        // text에 [[IMG]]가 있으면 보정
-        if ((!msg.type || msg.type === "text") && msg.text && msg.text.indexOf("[[IMG]]") === 0) {
-          msg.type = "image";
-          msg.image_url = msg.text.replace("[[IMG]]", "").trim();
-          msg.text = "";
-        }
-        // text에 [[FILE]]가 있으면 보정
-        if ((!msg.type || msg.type === "text") && msg.text && msg.text.indexOf("[[FILE]]") === 0) {
-          var pf2 = parseFileToken(msg.text);
-          if (pf2) {
-            msg.type = "file";
-            msg.file_url = pf2.url;
-            msg.file_name = pf2.name;
-            msg.text = "";
-          }
-        }
-
-        // 다른 방 메시지가 섞이는 것을 방지(메시지에 room_id가 들어있는 경우)
-        try {
-          if (msg.room_id && String(msg.room_id) !== String(roomIdNow)) return;
-        } catch (eRoom) {}
-
-        // 낙관적 렌더(로컬) 메시지/중복 제거
-        // ── mid 기반 dedup: relay(SignalBus)와 Firebase child_added 양쪽에서 같은 메시지가
-        //    들어올 수 있으므로 mid가 이미 등록된 경우 완전 스킵 ──
-        try {
-          var incomingMid = val.mid || "";
-          // mid 중복 체크 (relay와 공유)
-          if (incomingMid && __hasRelay(incomingMid)) return;
-          if (incomingMid) __rememberRelay(incomingMid);
-
-          for (var di = messages.length - 1; di >= 0; di--) {
-            var mm = messages[di];
-            if (!mm) continue;
-            // Firebase key 중복
-            if (mm.key && msg.key && mm.key === msg.key) return;
-            // mid 중복 (relay로 이미 렌더된 경우)
-            if (incomingMid && mm.mid && mm.mid === incomingMid) {
-              if (mm._local || mm._relay) { messages.splice(di, 1); }
-              else { return; }
-              break;
-            }
-            // 내용 기반 중복 (ts+user+text 동일)
-            var same = (mm.ts === msg.ts) && (String(mm.user_id || "") === String(msg.user_id || "")) && (String(mm.type || "text") === String(msg.type || "text")) &&
-              (String(mm.text || "") === String(msg.text || "")) && (String(mm.image_url || "") === String(msg.image_url || "")) && (String(mm.file_url || "") === String(msg.file_url || ""));
-            if (same) {
-              if (mm._local || mm._relay) { messages.splice(di, 1); }
-              else { return; }
-              break;
-            }
-          }
-        } catch (eDup) {}
-
-        // 방에 들어와 있는 동안은 "봤음"으로 계속 갱신(알림 오탐 방지)
-        try {
-          if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
-            window.SignalBus.markSeenTs(roomIdNow, msg.ts);
-          }
-        } catch (e0) {}
-
-        // 내 메시지면 lastMyTs 갱신(다른 기기에서 보낸 경우 포함)
-        try {
-          if (myId && msg.user_id && String(msg.user_id) === String(myId)) {
-            if (window.SignalBus && typeof window.SignalBus.markMyTs === "function") {
-              window.SignalBus.markMyTs(roomIdNow, msg.ts);
-            }
-          }
-        } catch (e1) {}
-
-        // (기존 알림음) 내 글 직후 다른 사람이 메시지를 보내면 띠리링(현재 방 내부)
-        var prev = messages.length ? messages[messages.length - 1] : null;
-        var shouldRing = false;
-        if (myId && prev && prev.user_id === myId && msg.user_id && msg.user_id !== myId) {
-          if (arrivedAt - listenStartedAt > 1500) shouldRing = true;
-        }
-
-        messages.push(msg);
-        if (messages.length > MAX_BUFFER) {
-          messages.splice(0, messages.length - MAX_BUFFER);
-        }
-        renderAll();
-
-        if (shouldRing && NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
-          NotifySound.playDdiring();
-          if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg);
-        }
-        try { snap.ref.remove(); } catch (e) {}
-      };
-
-      // Query(limitToLast) 리스너는 같은 Query 객체에서 off 해야 함
-      // → 전용 스트림 모듈(RoomMessageStream)로 attach/stop 관리
-      if (window.RoomMessageStream && typeof window.RoomMessageStream.start === "function") {
-        window.RoomMessageStream.start(refNow, MAX_BUFFER, onChildAdded);
-      } else {
-        // fallback (권장되지 않음)
-        try { refNow.limitToLast(MAX_BUFFER).on("child_added", onChildAdded); } catch (e0) {}
-      }
-
-      showStatus("실시간 연결 완료");
-    }).catch(function () {
-      showStatus("실시간 서버 인증에 실패했어요.");
-    });
-  }
-
-  function logToSheet(text, ts) {
+    function logToSheet(text, ts) {
     if (typeof window.postToSheet !== "function") return;
     try {
       var payload = {
