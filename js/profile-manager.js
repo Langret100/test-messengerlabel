@@ -376,8 +376,16 @@
           pwaBtn.style.opacity = "1";
           return;
         }
-        // 아직 prompt 없음 → 안내 표시
-        pwaBtn.textContent = "📱 바탕화면에 추가";
+        // HTTPS + SW 조건 갖춰진 경우 → Chrome 주소창 안내
+        var isHttps = location.protocol === "https:";
+        if (isHttps) {
+          pwaBtn.textContent = "📱 바탕화면에 추가";
+        } else {
+          pwaBtn.textContent = "⚠️ HTTPS에서만 설치 가능";
+          pwaBtn.disabled = true;
+          pwaBtn.style.opacity = "0.5";
+          return;
+        }
         pwaBtn.disabled = false;
         pwaBtn.style.opacity = "1";
       }

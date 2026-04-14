@@ -1429,15 +1429,30 @@ function scheduleRoomRefresh(roomId) {
         } catch (eRoom) {}
 
         // 낙관적 렌더(로컬) 메시지/중복 제거
+        // ── mid 기반 dedup: relay(SignalBus)와 Firebase child_added 양쪽에서 같은 메시지가
+        //    들어올 수 있으므로 mid가 이미 등록된 경우 완전 스킵 ──
         try {
+          var incomingMid = val.mid || "";
+          // mid 중복 체크 (relay와 공유)
+          if (incomingMid && __hasRelay(incomingMid)) return;
+          if (incomingMid) __rememberRelay(incomingMid);
+
           for (var di = messages.length - 1; di >= 0; di--) {
             var mm = messages[di];
             if (!mm) continue;
+            // Firebase key 중복
             if (mm.key && msg.key && mm.key === msg.key) return;
+            // mid 중복 (relay로 이미 렌더된 경우)
+            if (incomingMid && mm.mid && mm.mid === incomingMid) {
+              if (mm._local || mm._relay) { messages.splice(di, 1); }
+              else { return; }
+              break;
+            }
+            // 내용 기반 중복 (ts+user+text 동일)
             var same = (mm.ts === msg.ts) && (String(mm.user_id || "") === String(msg.user_id || "")) && (String(mm.type || "text") === String(msg.type || "text")) &&
               (String(mm.text || "") === String(msg.text || "")) && (String(mm.image_url || "") === String(msg.image_url || "")) && (String(mm.file_url || "") === String(msg.file_url || ""));
             if (same) {
-              if (mm._local) { messages.splice(di, 1); }
+              if (mm._local || mm._relay) { messages.splice(di, 1); }
               else { return; }
               break;
             }

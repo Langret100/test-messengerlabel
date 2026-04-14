@@ -37,11 +37,12 @@
 
   /* ── 홈화면 추가 요청 ── */
   function install() {
-    // Android Chrome: beforeinstallprompt 사용
+    // Android/PC Chrome: beforeinstallprompt 이벤트 캐치된 경우 → 즉시 설치 프롬프트
     if (deferredPrompt) {
-      deferredPrompt.prompt();
-      return deferredPrompt.userChoice.then(function (result) {
-        deferredPrompt = null;
+      var p = deferredPrompt;
+      deferredPrompt = null;
+      p.prompt();
+      return p.userChoice.then(function (result) {
         return result.outcome; // "accepted" | "dismissed"
       });
     }
@@ -52,8 +53,18 @@
       return Promise.resolve("ios_guide");
     }
 
-    // Android 기타 / Chrome (beforeinstallprompt 아직 안 왔을 때)
-    // 브라우저 메뉴 안내
+    // beforeinstallprompt 아직 안 온 경우:
+    // PWA 조건(HTTPS + SW + manifest) 충족 여부에 따라 안내 분기
+    var isHttps = location.protocol === "https:";
+    var hasSW   = "serviceWorker" in navigator;
+    if (isHttps && hasSW) {
+      // 조건은 갖춰진 상태 → Chrome이 아직 판단 중이거나 이미 설치됨
+      // Chrome 주소창 우측 설치 아이콘(⊕)을 직접 클릭하도록 시각 안내
+      showChrombarInstallGuide();
+      return Promise.resolve("guide_shown");
+    }
+
+    // 조건 미충족(HTTP 등)
     showGenericInstallGuide();
     return Promise.resolve("guide_shown");
   }
@@ -108,6 +119,24 @@
       if (e.target === overlay) overlay.remove();
     });
     document.body.appendChild(overlay);
+  }
+
+  /* Chrome 주소창 설치 아이콘 직접 안내 (beforeinstallprompt 대기 중일 때) */
+  function showChrombarInstallGuide() {
+    var isAndroid = /android/i.test(navigator.userAgent);
+    if (isAndroid) {
+      _makeGuideBox("androidChrombarGuide", [
+        "Chrome 주소창 오른쪽 끝 <b>점 세 개 메뉴(⋮)</b>를 탭하세요.",
+        "<b>'앱 설치'</b> 또는 <b>'홈 화면에 추가'</b>를 탭하세요.",
+        "<b>'설치'</b>를 탭하면 완료!<br><span style='color:#94a3b8;font-size:12px;'>메뉴에 없으면 페이지를 새로고침 후 다시 시도해 주세요.</span>"
+      ]);
+    } else {
+      _makeGuideBox("pcChrombarGuide", [
+        "Chrome 주소창 오른쪽 끝 <b>⊕ 설치 아이콘</b>을 클릭하세요.<br><span style='color:#94a3b8;font-size:12px;'>아이콘이 안 보이면 페이지를 새로고침(F5) 후 다시 시도해 주세요.</span>",
+        "<b>'마이파이 설치'</b>를 클릭하세요.",
+        "<b>'설치'</b>를 클릭하면 완료!<br><span style='color:#94a3b8;font-size:12px;'>바탕화면과 작업표시줄에 아이콘이 생깁니다.</span>"
+      ]);
+    }
   }
 
   function showGenericInstallGuide() {

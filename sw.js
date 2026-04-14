@@ -2,14 +2,16 @@
    [sw.js] Service Worker - 마이메신저 PWA
    ============================================================ */
 
-var CACHE_NAME = "mypai-v2";
+var CACHE_NAME = "mypai-v3";
 var CACHE_URLS = [
   "./games/social-messenger.html",
   "./js/config.js",
   "./js/profile-manager.js",
   "./js/pwa-manager.js",
   "./js/social-messenger.js",
-  "./images/icons/icon-192x192.png"
+  "./images/icons/icon-192x192.png",
+  "./images/icons/favicon-32x32.png",
+  "./images/icons/favicon.ico"
 ];
 
 self.addEventListener("install", function (e) {
