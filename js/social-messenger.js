@@ -531,7 +531,7 @@ var NotifySetting = (function () {
     if (__lastPruneTs[roomId] && (now - __lastPruneTs[roomId]) < 60000) return; // 1분 쓰로틀
     __lastPruneTs[roomId] = now;
     try {
-      var cutoff = now - (30 * 24 * 60 * 60 * 1000);
+      var cutoff = now - (10 * 24 * 60 * 60 * 1000); // 10일
       var __fbDb2 = ensureFirebase();
       var __fbPath2 = getFirebasePath(roomId);
       if (!__fbDb2 || !__fbPath2) return;
@@ -673,9 +673,13 @@ var NotifySetting = (function () {
             }
           } catch (eSound) {}
 
-          // 미확인 배지
+          // 미확인 배지 - 내가 현재 보고 있는 방이면 증가 안 함
           try {
-            if (window.PwaManager) window.PwaManager.incrementUnread(roomId);
+            var isCurrentRoom = (document.visibilityState !== "hidden") &&
+                                (String(currentRoomId || "") === String(roomId || ""));
+            if (window.PwaManager && !isCurrentRoom) {
+              window.PwaManager.incrementUnread(roomId);
+            }
           } catch (eBadge) {}
         } catch (e) {}
       };
@@ -957,6 +961,11 @@ var NotifySetting = (function () {
         this.onerror = null;
         this.src = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#c7d2fe"/><circle cx="20" cy="15" r="7" fill="#818cf8"/><ellipse cx="20" cy="34" rx="12" ry="9" fill="#818cf8"/></svg>');
       };
+      // 클릭 시 프로필 이미지 확대 보기
+      avatarImg.style.cursor = "pointer";
+      avatarImg.addEventListener("click", function () {
+        showProfileZoom(msg.nickname || "익명", this.src);
+      });
       // 백그라운드 Drive 캐시
       if (window.ProfileManager && window.ProfileManager.fetchAndCacheProfile) {
         setTimeout(function () { window.ProfileManager.fetchAndCacheProfile(msg.nickname || ""); }, 400);
@@ -1126,6 +1135,7 @@ var NotifySetting = (function () {
       if (lastKey !== key) {
         var sep = document.createElement("div");
         sep.className = "date-separator";
+        sep.setAttribute("data-date-key", key);
         sep.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
         frag.appendChild(sep);
         lastKey = key;
@@ -1142,6 +1152,30 @@ var NotifySetting = (function () {
   }
 
   /* 새 메시지 1개 추가 (전체 재렌더 없이 append only) */
+
+  /* ── 프로필 이미지 확대 보기 ── */
+  function showProfileZoom(nickname, imgSrc) {
+    var existing = document.getElementById("profileZoomOverlay");
+    if (existing) existing.remove();
+
+    var overlay = document.createElement("div");
+    overlay.id = "profileZoomOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.75);animation:fadeIn .15s ease;";
+
+    var img = document.createElement("img");
+    img.src = imgSrc;
+    img.style.cssText = "max-width:min(280px,80vw);max-height:min(280px,80vw);border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,0.3);box-shadow:0 8px 40px rgba(0,0,0,0.5);";
+
+    var nameEl = document.createElement("div");
+    nameEl.textContent = nickname;
+    nameEl.style.cssText = "color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-shadow:0 1px 4px rgba(0,0,0,0.5);";
+
+    overlay.appendChild(img);
+    overlay.appendChild(nameEl);
+    overlay.addEventListener("click", function () { overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
   function appendNewMessage(msg) {
     if (!bodyEl || !msg) return;
     // 빈 힌트 제거
@@ -1150,12 +1184,13 @@ var NotifySetting = (function () {
 
     var ts = msg.ts || Date.now();
     var key = formatDateKey(ts);
-    // 날짜가 바뀌었으면 구분선 추가
+    // 날짜가 바뀌었으면 구분선 추가 (key 기반으로 비교 - label 텍스트 비교보다 정확)
     var lastSep = bodyEl.querySelector(".date-separator:last-of-type");
-    var lastKey = lastSep ? lastSep.querySelector("span").textContent : null;
-    if (lastKey !== formatDateLabel(ts)) {
+    var lastKey = lastSep ? lastSep.getAttribute("data-date-key") : null;
+    if (lastKey !== key) {
       var sep2 = document.createElement("div");
       sep2.className = "date-separator";
+      sep2.setAttribute("data-date-key", key);
       sep2.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
       bodyEl.appendChild(sep2);
     }
@@ -1163,106 +1198,10 @@ var NotifySetting = (function () {
     _lastRenderedCount++;
   }
 
-  async function loadRecentFromSheet(roomId) {
-  var wantedRoomId = String(roomId || currentRoomId || "").trim();
-  var seq = ++__loadSeq;
-  if (typeof window.postToSheet !== "function") return;
-  try {
-    var res = await window.postToSheet({
-      mode: "social_recent_room",
-      room_id: wantedRoomId,
-      nickname: getSafeNickname(),
-      limit: MAX_BUFFER
-    });
-    if (!res || !res.ok) return;
-
-    var text = await res.text();
-    var json = JSON.parse(text || "{}");
-    var rows = (json && json.messages) ? json.messages : [];
-
-    // 방이 바뀐 뒤/새 요청이 시작된 뒤 늦게 온 응답은 무시(대화 섞임 방지)
-    if (seq !== __loadSeq) return;
-    if (currentRoomId !== wantedRoomId) return;
-
-    // 시트 목록 파싱
-    var sheetList = [];
-    (rows || []).forEach(function (row) {
-      if (!row) return;
-      var rawMsg = (row.text || row.chatlog || row.message || row.msg || "").toString();
-      var mid = row.mid || row.message_id || row.id || "";
-      var m = {
-        key: mid ? ("m_" + mid) : ("s_" + (row.ts || row.timestamp || row.date || Date.now()) + "_" + Math.random().toString(16).slice(2)),
-        mid: mid || "",
-        user_id: row.user_id || "",
-        nickname: row.nickname || "익명",
-        text: rawMsg,
-        ts: row.ts || row.timestamp || row.date || Date.now(),
-        room_id: wantedRoomId,
-        _sheet: true
-      };
-
-      // 토큰 기반 타입 복원([[IMG]] / [[FILE]])
-      try {
-        if (rawMsg.indexOf("[[IMG]]") === 0) {
-          m.type = "image";
-          m.image_url = rawMsg.replace("[[IMG]]", "").trim();
-          m.text = "";
-        } else if (rawMsg.indexOf("[[FILE]]") === 0) {
-          var pf = parseFileToken(rawMsg);
-          if (pf) {
-            m.type = "file";
-            m.file_url = pf.url;
-            m.file_name = pf.name;
-            m.text = "";
-          } else {
-            m.type = "text";
-          }
-        } else {
-          m.type = "text";
-        }
-      } catch (e0) {
-        m.type = "text";
-      }
-
-      sheetList.push(m);
-    });
-
-    // merge: 기존(릴레이 포함)을 덮어쓰지 않고 합치기 (mid 우선)
-    var __relayIdx = __smBuildRelayMidIndex(messages);
-    sheetList.forEach(function(m){ __smTryAttachMidFromRelayIndex(m, __relayIdx); });
-
-    var map = {};
-    function keyOf(m) {
-      var mid2 = (m && m.mid) ? String(m.mid) : "";
-      if (mid2) return "m:" + mid2;
-      return "k:" + String(m.user_id || "") + "|" + String(m.nickname || "") + "|" + String(m.text || "") + "|" + String(m.ts || 0);
-    }
-
-    (messages || []).forEach(function (m) {
-      if (!m) return;
-      map[keyOf(m)] = m;
-    });
-
-    sheetList.forEach(function (m) {
-      if (!m) return;
-      map[keyOf(m)] = m; // 시트가 정답 우선
-      // 디듀프 힌트
-      try { if (m.mid) __rememberRelay(m.mid); } catch (eD) {}
-    });
-
-    var merged = Object.keys(map).map(function (k) { return map[k]; });
-    merged.sort(function (a, b) { return Number(a.ts || 0) - Number(b.ts || 0); });
-
-    if (merged.length > MAX_BUFFER) {
-      merged = merged.slice(merged.length - MAX_BUFFER);
-    }
-
-    messages = merged;
-    renderAll();
-  } catch (e) {
-    console.warn("[messenger] 최근 메시지 불러오기 실패:", e);
-  }
-}
+  // loadRecentFromSheet: 제거됨
+  // 글은 Firebase에서만 로드. 시트는 백업 쓰기 전용.
+  // (Firebase가 비어있어도 시트 폴백 없음 - 데이터 정합성 보장)
+  function loadRecentFromSheet(roomId) { return; }
 
 
 
@@ -1407,42 +1346,7 @@ function scheduleRoomRefresh(roomId) {
   // 두 리스너가 동시에 같은 Firebase 경로를 구독해 메시지가 2개씩 렌더되는 문제 수정
   function startListen() { return; }
 
-    function logToSheet(text, ts) {
-    if (typeof window.postToSheet !== "function") return;
-    try {
-      var payload = {
-        mode: "social_chat_room",
-        room_id: currentRoomId || "",
-        user_id: myId || "",
-        nickname: getSafeNickname(),
-        message: text,
-        text: text,
-        ts: ts || Date.now()
-      };
-      // 구버전 서버(rooms 미지원) 대비: global이면 기존 mode도 함께 기록 시도
-      if (!currentRoomId) {
-        try {
-          window.postToSheet({
-            mode: "social_chat",
-            user_id: myId || "",
-            nickname: getSafeNickname(),
-            message: text,
-            text: text,
-            ts: ts || Date.now()
-          });
-        } catch (e0) {}
-      }
-
-      var p = window.postToSheet(payload);
-      if (p && typeof p.catch === "function") {
-        p.catch(function (e) {
-          console.warn("[messenger] 시트 기록 실패:", e);
-        });
-      }
-    } catch (e) {
-      console.warn("[messenger] logToSheet 예외:", e);
-    }
-  }
+  // logToSheet: 제거됨 (데드코드, 호출 없음)
 
     function sendTextMessage(text) {
     var clean = (text || "").trim();
@@ -1547,34 +1451,12 @@ function scheduleRoomRefresh(roomId) {
         text: clean,
         ts: now
       }).then(function (res) {
-        if (!res || !res.ok) throw new Error("sheet write failed");
-
-        // 성공 토스트(보냈어요!)는 표시하지 않음
-
-        // (선택) 시트 기반으로 1회 정렬/동기화(필요 시)
-        scheduleRoomRefresh(currentRoomId || "");
+        if (!res || !res.ok) console.warn("[messenger] 텍스트 시트 백업 응답 이상(무시)");
       }).catch(function (err) {
-        console.warn("[messenger] 시트 전송 실패:", err);
-        showStatus("전송 중 문제가 생겼어요.");
-
-        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
-          }
-        } catch (eR) {}
-
-        // 낙관적 렌더 롤백
-        try {
-          for (var i = messages.length - 1; i >= 0; i--) {
-            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
-          }
-          renderAll();
-        } catch (e0) {}
+        console.warn("[messenger] 시트 백업 실패(무시):", err);
       });
     } catch (e) {
-      console.warn("[messenger] 전송 예외:", e);
-      showStatus("전송 중 문제가 생겼어요.");
+      console.warn("[messenger] 시트 백업 예외(무시):", e);
     }
   }
 
@@ -1910,32 +1792,12 @@ onPickImage: async function () {
         text: token,
         ts: now
       }).then(function (res) {
-        if (!res || !res.ok) throw new Error("sheet write failed");
-
-        // 성공 토스트(사진을 보냈어요!)는 표시하지 않음
-
-        scheduleRoomRefresh(currentRoomId || "");
+        if (!res || !res.ok) console.warn("[messenger] 이미지 시트 백업 응답 이상(무시)");
       }).catch(function (err) {
-        console.warn("[messenger] 이미지 시트 전송 실패:", err);
-        showStatus("전송 중 문제가 생겼어요.");
-
-        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
-          }
-        } catch (eR) {}
-
-        try {
-          for (var i = messages.length - 1; i >= 0; i--) {
-            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
-          }
-          renderAll();
-        } catch (e0) {}
+        console.warn("[messenger] 이미지 시트 백업 실패(무시):", err);
       });
     } catch (e) {
-      console.warn("[messenger] 이미지 전송 예외:", e);
-      showStatus("전송 중 문제가 생겼어요.");
+      console.warn("[messenger] 이미지 시트 백업 예외(무시):", e);
     }
   }
 
@@ -2030,32 +1892,12 @@ onPickImage: async function () {
         text: token,
         ts: now
       }).then(function (res) {
-        if (!res || !res.ok) throw new Error("sheet write failed");
-
-        // 성공 토스트(파일을 보냈어요!)는 표시하지 않음
-
-        scheduleRoomRefresh(currentRoomId || "");
+        if (!res || !res.ok) console.warn("[messenger] 파일 시트 백업 응답 이상(무시)");
       }).catch(function (err) {
-        console.warn("[messenger] 파일 시트 전송 실패:", err);
-        showStatus("전송 중 문제가 생겼어요.");
-
-        // (B안) 다른 클라이언트에 임시 중계 취소(retract)
-        try {
-          if (window.SignalBus && typeof window.SignalBus.push === "function") {
-            window.SignalBus.push(currentRoomId || "", { kind: "retract", mid: __mid, room_id: currentRoomId || "", user_id: myId || "", ts: Date.now() });
-          }
-        } catch (eR) {}
-
-        try {
-          for (var i = messages.length - 1; i >= 0; i--) {
-            if (messages[i] && messages[i].key === __localKey) { messages.splice(i, 1); break; }
-          }
-          renderAll();
-        } catch (e0) {}
+        console.warn("[messenger] 파일 시트 백업 실패(무시):", err);
       });
     } catch (e) {
-      console.warn("[messenger] 파일 전송 예외:", e);
-      showStatus("전송 중 문제가 생겼어요.");
+      console.warn("[messenger] 파일 시트 백업 예외(무시):", e);
     }
   }
 

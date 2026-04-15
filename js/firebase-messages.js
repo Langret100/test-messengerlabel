@@ -15,7 +15,7 @@
 (function () {
   if (window.FirebaseMessages) return;
 
-  var DAYS_30 = 30 * 24 * 60 * 60 * 1000;
+  var DAYS_30 = 10 * 24 * 60 * 60 * 1000; // 10일 보관
   var MSG_LIMIT = 100;
 
   /* ---- Firebase 준비 여부 확인 ---- */
