@@ -640,18 +640,26 @@ var NotifySetting = (function () {
           if (inMid2 && __hasRelay(inMid2)) return;
           if (inMid2) __rememberRelay(inMid2);
 
-          // _local 메시지 교체
+          // _local 메시지 교체 여부 확인
+          var wasLocal = false;
           for (var di2 = messages.length - 1; di2 >= 0; di2--) {
             var mm2 = messages[di2];
             if (!mm2) continue;
             if (inMid2 && mm2.mid && mm2.mid === inMid2 && (mm2._local || mm2._relay)) {
-              messages.splice(di2, 1); break;
+              messages.splice(di2, 1);
+              wasLocal = true;
+              break;
             }
           }
 
           messages.push(msg2);
           messages.sort(function (a, b) { return (__smParseTs(a.ts) - __smParseTs(b.ts)); });
-          appendNewMessage(msg2);
+          // _local 교체 시 renderAll(날짜구분선 재계산), 신규 메시지면 appendNewMessage
+          if (wasLocal) {
+            renderAll();
+          } else {
+            appendNewMessage(msg2);
+          }
 
           // 봤음 갱신
           try {
@@ -660,11 +668,9 @@ var NotifySetting = (function () {
             }
           } catch (e0) {}
 
-          // 알림음: 내 글 직후 다른 사람 메시지
+          // 알림음: 다른 사람 메시지 (구독 시작 후 1.5초 이후, 내 메시지 제외)
           try {
-            var prevMsg = messages.length > 1 ? messages[messages.length - 2] : null;
-            if (myId && prevMsg && prevMsg.user_id === myId &&
-                msg2.user_id && msg2.user_id !== myId &&
+            if (msg2.user_id && String(msg2.user_id) !== String(myId || "") &&
                 (Date.now() - subStartTs) > 1500) {
               if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
                 NotifySound.playDdiring();
@@ -673,14 +679,21 @@ var NotifySetting = (function () {
             }
           } catch (eSound) {}
 
-          // 미확인 배지 - 내가 현재 보고 있는 방이면 증가 안 함
+          // 방 목록 배지(빨간 점) - 내가 현재 보고 있는 방이 아닐 때
           try {
-            var isCurrentRoom = (document.visibilityState !== "hidden") &&
-                                (String(currentRoomId || "") === String(roomId || ""));
-            if (window.PwaManager && !isCurrentRoom) {
-              window.PwaManager.incrementUnread(roomId);
+            if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
+              if (String(msg2.room_id || roomId) !== String(currentRoomId || "")) {
+                window.RoomUnreadBadge.mark(msg2.room_id || roomId, msg2.ts);
+              }
             }
           } catch (eBadge) {}
+
+          // 앱 아이콘 배지(숫자) - 앱이 백그라운드일 때
+          try {
+            if (window.PwaManager && document.visibilityState === "hidden") {
+              window.PwaManager.incrementUnread(roomId);
+            }
+          } catch (ePwaBadge) {}
         } catch (e) {}
       };
 
@@ -1112,11 +1125,13 @@ var NotifySetting = (function () {
      ──────────────────────────────────────────────────────── */
   var _renderBatchTimer = null;
   var _lastRenderedCount = 0;
+  var _lastRenderedDateKey = null; // 마지막으로 렌더된 날짜 key 추적
 
   /* 전체 재렌더 (방 전환 / 시트 폴백 등 전체 갱신 필요 시) */
   function renderAll() {
     if (!bodyEl) return;
     _lastRenderedCount = 0;
+    _lastRenderedDateKey = null;
     bodyEl.innerHTML = "";
     if (!messages || messages.length === 0) {
       var empty = document.createElement("div");
@@ -1139,6 +1154,7 @@ var NotifySetting = (function () {
         sep.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
         frag.appendChild(sep);
         lastKey = key;
+        _lastRenderedDateKey = key;
       }
       // appendMessage를 bodyEl 대신 frag에
       var _orig = bodyEl;
@@ -1184,15 +1200,14 @@ var NotifySetting = (function () {
 
     var ts = msg.ts || Date.now();
     var key = formatDateKey(ts);
-    // 날짜가 바뀌었으면 구분선 추가 (key 기반으로 비교 - label 텍스트 비교보다 정확)
-    var lastSep = bodyEl.querySelector(".date-separator:last-of-type");
-    var lastKey = lastSep ? lastSep.getAttribute("data-date-key") : null;
-    if (lastKey !== key) {
+    // JS 변수로 직접 추적 - querySelector는 :last-of-type 오작동으로 사용 안 함
+    if (_lastRenderedDateKey !== key) {
       var sep2 = document.createElement("div");
       sep2.className = "date-separator";
       sep2.setAttribute("data-date-key", key);
       sep2.innerHTML = "<span>" + formatDateLabel(ts) + "</span>";
       bodyEl.appendChild(sep2);
+      _lastRenderedDateKey = key;
     }
     appendMessage(msg);
     _lastRenderedCount++;
@@ -1331,9 +1346,24 @@ function __applyRelayMessage(msgInfo) {
       }
     } catch (eSeen) {}
 
+    // _local 교체 여부에 따라 renderAll or appendNewMessage
+    var relayWasLocal = false;
+    for (var ri = messages.length - 2; ri >= 0; ri--) {
+      var rm = messages[ri];
+      if (!rm) continue;
+      if (m.mid && rm.mid && rm.mid === m.mid && (rm._local)) {
+        messages.splice(ri, 1);
+        relayWasLocal = true;
+        break;
+      }
+    }
     messages.push(m);
     if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
-    appendNewMessage(m);
+    if (relayWasLocal) {
+      renderAll();
+    } else {
+      appendNewMessage(m);
+    }
   } catch (e) {}
 }
 
@@ -1739,7 +1769,7 @@ onPickImage: async function () {
     try {
       messages.push(__localMsg);
       if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
-      renderAll();
+      appendNewMessage(__localMsg);
       if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
         window.SignalBus.markSeenTs(currentRoomId || "", now);
       }
@@ -1838,7 +1868,7 @@ onPickImage: async function () {
     try {
       messages.push(__localMsg);
       if (messages.length > MAX_BUFFER) messages.splice(0, messages.length - MAX_BUFFER);
-      renderAll();
+      appendNewMessage(__localMsg);
       if (window.SignalBus && typeof window.SignalBus.markSeenTs === "function") {
         window.SignalBus.markSeenTs(currentRoomId || "", now);
       }
@@ -1908,6 +1938,7 @@ onPickImage: async function () {
     } catch (e) {}
     messages = [];
     lastKey = null;
+    _lastRenderedDateKey = null;
   }
 
   function switchRoom(roomId, meta) {

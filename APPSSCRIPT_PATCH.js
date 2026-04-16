@@ -171,3 +171,48 @@ function handleGetImageBase64(params) {
 //     .createTextOutput(JSON.stringify(obj))
 //     .setMimeType(ContentService.MimeType.JSON);
 // }
+
+/**
+ * ============================================================
+ * [Firebase Storage 보안 규칙]
+ * Firebase Console > Storage > Rules 에 아래 규칙 적용
+ * ============================================================
+ *
+ * rules_version = '2';
+ * service firebase.storage {
+ *   match /b/{bucket}/o {
+ *     // 채팅 이미지: 인증 없이 읽기 허용, 쓰기는 인증 필요
+ *     match /chat_images/{file} {
+ *       allow read: if true;
+ *       allow write: if true; // 익명 인증 허용 시
+ *     }
+ *     match /chat_files/{file} {
+ *       allow read: if true;
+ *       allow write: if true;
+ *     }
+ *   }
+ * }
+ *
+ * ============================================================
+ * [4.5GB 초과 시 오래된 파일 삭제 - Apps Script 트리거]
+ * Apps Script 에서 시간 기반 트리거(매일 1회)로 실행
+ * ============================================================
+ */
+
+/**
+ * Firebase Storage 용량 관리 (Apps Script에서 실행)
+ * Firebase Admin SDK 사용 필요 - Service Account 키 필요
+ * 아래는 개념 코드이며 실제 실행은 Firebase Admin SDK 환경에서 가능
+ */
+/*
+function cleanupFirebaseStorage() {
+  var BUCKET = "web-ghost-c447b.firebasestorage.app";
+  var MAX_BYTES = 4.5 * 1024 * 1024 * 1024; // 4.5GB
+  var PATHS = ["chat_images/", "chat_files/"];
+
+  // Firebase Admin SDK로 파일 목록 조회 후 총 용량 계산
+  // 초과 시 가장 오래된 파일부터 삭제
+  // → 실제 구현은 Firebase Admin SDK Node.js 환경 권장
+  //    (Apps Script에서는 Firebase REST API로 구현 가능)
+}
+*/
