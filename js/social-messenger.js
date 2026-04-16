@@ -679,21 +679,21 @@ var NotifySetting = (function () {
             }
           } catch (eSound) {}
 
-          // 방 목록 배지(빨간 점) - 내가 현재 보고 있는 방이 아닐 때
-          try {
-            if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
-              if (String(msg2.room_id || roomId) !== String(currentRoomId || "")) {
-                window.RoomUnreadBadge.mark(msg2.room_id || roomId, msg2.ts);
+          // 배지: 내가 현재 보고 있는 방이 아닐 때
+          var msgRoomId = String(msg2.room_id || roomId || "");
+          var isMyCurrentRoom = (msgRoomId === String(currentRoomId || ""));
+          if (!isMyCurrentRoom) {
+            // 방 목록 빨간 점
+            try {
+              if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
+                window.RoomUnreadBadge.mark(msgRoomId, msg2.ts);
               }
-            }
-          } catch (eBadge) {}
-
-          // 앱 아이콘 배지(숫자) - 앱이 백그라운드일 때
-          try {
-            if (window.PwaManager && document.visibilityState === "hidden") {
-              window.PwaManager.incrementUnread(roomId);
-            }
-          } catch (ePwaBadge) {}
+            } catch (eBadge) {}
+            // 앱 아이콘 숫자 배지 (항상 - 앱 열려있어도 다른 방이면 표시)
+            try {
+              if (window.PwaManager) window.PwaManager.incrementUnread(msgRoomId);
+            } catch (ePwaBadge) {}
+          }
         } catch (e) {}
       };
 
@@ -1184,10 +1184,21 @@ var NotifySetting = (function () {
 
     var nameEl = document.createElement("div");
     nameEl.textContent = nickname;
-    nameEl.style.cssText = "color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-shadow:0 1px 4px rgba(0,0,0,0.5);";
+    nameEl.style.cssText = "color:#fff;font-size:15px;font-weight:700;margin-top:14px;text-shadow:0 1px 4px rgba(0,0,0,0.5);text-align:center;";
 
     overlay.appendChild(img);
     overlay.appendChild(nameEl);
+
+    // 상태메시지
+    var statusMsg = (window.ProfileManager && window.ProfileManager.getStatusMsg)
+      ? window.ProfileManager.getStatusMsg(nickname) : "";
+    if (statusMsg) {
+      var statusEl = document.createElement("div");
+      statusEl.textContent = statusMsg;
+      statusEl.style.cssText = "color:rgba(255,255,255,0.82);font-size:13px;margin-top:6px;max-width:min(260px,76vw);text-align:center;line-height:1.5;word-break:break-all;text-shadow:0 1px 3px rgba(0,0,0,0.4);";
+      overlay.appendChild(statusEl);
+    }
+
     overlay.addEventListener("click", function () { overlay.remove(); });
     document.body.appendChild(overlay);
   }

@@ -91,6 +91,7 @@
         if (!cc[nickname]) cc[nickname] = {};
         cc[nickname].imgLocal   = imgData;
         cc[nickname].imgUrl     = val.imgUrl || "";
+        cc[nickname].statusMsg  = val.statusMsg || "";
         cc[nickname].profileTs  = Number(val.ts || 0); // 서버 변경 시각
         cc[nickname].ts         = Date.now();           // 로컬 캐시 저장 시각
         saveProfiles(cc);
@@ -151,9 +152,13 @@
           // 이미 canvas로 압축된 dataUrl이면 그대로 사용 (img.width 확인 불필요)
         } catch (eImg) {}
 
+        var statusMsg = window.__pendingStatusMsg !== undefined
+          ? String(window.__pendingStatusMsg || "")
+          : "";
         var payload = {
-          imgBase64: finalDataUrl,   // base64 직접 저장 (CORS 없이 바로 표시)
+          imgBase64: finalDataUrl,
           nickname:  nickname,
+          statusMsg: statusMsg,
           ts:        Date.now()
         };
 
@@ -164,6 +169,7 @@
             var profs = loadProfiles();
             if (!profs[nickname]) profs[nickname] = {};
             profs[nickname].imgLocal  = finalDataUrl;
+            profs[nickname].statusMsg = payload.statusMsg || "";
             profs[nickname].profileTs = savedTs; // 서버 ts 와 동기화
             profs[nickname].ts        = Date.now();
             saveProfiles(profs);
@@ -261,6 +267,9 @@
       "<button id='pmImgBtn' type='button' style='border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:10px;padding:6px 14px;font-size:13px;cursor:pointer;'>프로필 이미지 변경</button>",
       "<input id='pmImgInput' type='file' accept='image/*' style='display:none'></div>",
       "<div style='display:flex;flex-direction:column;gap:6px;'>",
+      "<span style='font-size:13px;font-weight:700;color:#374151;'>상태메시지</span>",
+      "<textarea id='pmStatusInput' maxlength='200' placeholder='상태메시지를 입력하세요 (200자 이내)' style='width:100%;height:64px;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit;color:#374151;'>" + (getStatusMsg(me) || "") + "</textarea></div>",
+      "<div style='display:flex;flex-direction:column;gap:6px;'>",
       "<span style='font-size:13px;font-weight:700;color:#374151;'>채팅 배경</span>",
       "<div style='display:flex;gap:8px;'>",
       "<button id='pmBgBtn' type='button' style='border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;padding:6px 14px;font-size:13px;cursor:pointer;'>배경 선택</button>",
@@ -337,15 +346,35 @@
 
     document.getElementById("pmSave").addEventListener("click", function () {
       var st = document.getElementById("pmStatus");
+      var statusInputEl = document.getElementById("pmStatusInput");
+      var newStatusMsg = statusInputEl ? statusInputEl.value.slice(0, 200) : "";
       st.textContent = "저장 중...";
       setMyBg(me, pendingBg);
       applyBackground(me);
+      // 상태메시지 저장 (이미지 변경 여부 무관)
+      window.__pendingStatusMsg = newStatusMsg;
       if (pendingImg) {
         uploadProfileImage(me, pendingImg)
-          .then(function () { st.textContent = "✅ 저장 완료!"; refreshAllAvatars(); refreshGearButton(me); setTimeout(close, 900); })
-          .catch(function (err) { st.textContent = "⚠️ 업로드 실패: " + (err && err.message || "오류"); refreshAllAvatars(); });
+          .then(function () {
+            // 이미지 저장 시 statusMsg도 함께 저장됨(payload에 포함)
+            window.__pendingStatusMsg = undefined;
+            st.textContent = "✅ 저장 완료!"; refreshAllAvatars(); refreshGearButton(me); setTimeout(close, 900);
+          })
+          .catch(function (err) {
+            window.__pendingStatusMsg = undefined;
+            st.textContent = "⚠️ 업로드 실패: " + (err && err.message || "오류"); refreshAllAvatars();
+          });
       } else {
-        st.textContent = "✅ 저장 완료!"; setTimeout(close, 700);
+        // 이미지 변경 없이 상태메시지만 저장
+        saveStatusMsg(me, newStatusMsg)
+          .then(function () {
+            window.__pendingStatusMsg = undefined;
+            st.textContent = "✅ 저장 완료!"; setTimeout(close, 700);
+          })
+          .catch(function () {
+            window.__pendingStatusMsg = undefined;
+            st.textContent = "✅ 저장 완료!"; setTimeout(close, 700);
+          });
       }
     });
 
@@ -485,8 +514,37 @@
     });
   }
 
+
+
+  function saveStatusMsg(nickname, statusMsg) {
+    return new Promise(function (resolve, reject) {
+      if (!nickname) return reject(new Error("no nickname"));
+      try {
+        var db = firebase.database();
+        var safe = String(nickname).replace(/[.#$\[\]\/]/g, "_");
+        db.ref("profiles/" + safe + "/statusMsg").set(String(statusMsg || ""))
+          .then(function () {
+            // 로컬 캐시 갱신
+            var profs = loadProfiles();
+            if (!profs[nickname]) profs[nickname] = {};
+            profs[nickname].statusMsg = String(statusMsg || "");
+            saveProfiles(profs);
+            resolve();
+          }).catch(reject);
+      } catch (e) { reject(e); }
+    });
+  }
+
+  function getStatusMsg(nickname) {
+    if (!nickname) return "";
+    var p = loadProfiles()[nickname];
+    return (p && p.statusMsg) ? String(p.statusMsg) : "";
+  }
+
   window.ProfileManager = {
     getAvatarUrl:         getAvatarUrl,
+    getStatusMsg:         getStatusMsg,
+    saveStatusMsg:        saveStatusMsg,
     fetchAndCacheProfile: fetchAndCacheProfile,
     refreshAllAvatars:    refreshAllAvatars,
     uploadProfileImage:   uploadProfileImage,
