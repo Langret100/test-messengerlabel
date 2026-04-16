@@ -42,27 +42,30 @@
   }
 
   async function uploadToSheet(opts) {
-    // Firebase Storage 업로드
+    // Google Drive 업로드 (Apps Script 경유)
     // opts: { base64, mime, filename, size, user_id, nickname, ts }
-    if (typeof firebase === "undefined" || !firebase.storage) {
-      throw new Error("Firebase Storage SDK 없음");
+    if (typeof window.SHEET_IMAGE_UPLOAD_URL === "undefined" || !window.SHEET_IMAGE_UPLOAD_URL) {
+      throw new Error("SHEET_IMAGE_UPLOAD_URL not configured");
     }
-    var storage = firebase.storage();
-    var ts = opts.ts || Date.now();
-    var safeName = (opts.filename || "file").replace(/[^a-zA-Z0-9가-힣._-]/g, "_");
-    var path = "chat_files/" + ts + "_" + Math.random().toString(36).slice(2) + "_" + safeName;
-    var storageRef = storage.ref(path);
+    var body = new URLSearchParams();
+    body.append("mode", "social_upload_file");
+    body.append("mime", opts.mime || "application/octet-stream");
+    body.append("filename", opts.filename || "file");
+    body.append("size", String(opts.size || 0));
+    body.append("data", opts.base64 || "");
+    body.append("user_id", opts.user_id || "");
+    body.append("nickname", opts.nickname || "");
+    body.append("ts", String(opts.ts || Date.now()));
 
-    // base64 → Blob
-    var mime = opts.mime || "application/octet-stream";
-    var bstr = atob(opts.base64 || "");
-    var u8arr = new Uint8Array(bstr.length);
-    for (var i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-    var blob = new Blob([u8arr], { type: mime });
-
-    var snapshot = await storageRef.put(blob, { contentType: mime });
-    var url = await snapshot.ref.getDownloadURL();
-    if (!url) throw new Error("다운로드 URL 없음");
+    var res = await fetch(window.SHEET_IMAGE_UPLOAD_URL, { method: "POST", body: body });
+    var txt = await res.text();
+    var json = {};
+    try { json = JSON.parse(txt || "{}"); } catch (e) {}
+    if (!res.ok || !json || !json.ok) {
+      throw new Error((json && json.error) ? json.error : "upload failed");
+    }
+    var url = json.url || json.file_url || "";
+    if (!url) throw new Error("no url returned");
     return { url: url };
   }
 

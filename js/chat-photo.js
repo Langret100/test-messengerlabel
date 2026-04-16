@@ -108,31 +108,35 @@
   }
 
   async function uploadToStorage(opts) {
-    // Firebase Storage 업로드
-    // opts: { blob, mime, dataUrl, user_id, nickname, ts }
-    if (typeof firebase === "undefined" || !firebase.storage) {
-      throw new Error("Firebase Storage SDK 없음");
+    // Google Drive 업로드 (Apps Script 경유)
+    // opts: { blob, mime, dataUrl, base64, user_id, nickname, ts }
+    if (typeof window.SHEET_IMAGE_UPLOAD_URL === "undefined" || !window.SHEET_IMAGE_UPLOAD_URL) {
+      throw new Error("SHEET_IMAGE_UPLOAD_URL not configured");
     }
-    var storage = firebase.storage();
-    var ts = opts.ts || Date.now();
-    var ext = (opts.mime || "image/jpeg").replace("image/", "");
-    var path = "chat_images/" + ts + "_" + Math.random().toString(36).slice(2) + "." + ext;
-    var storageRef = storage.ref(path);
-
-    // blob 우선, 없으면 dataUrl → blob 변환
-    var blob = opts.blob;
-    if (!blob && opts.dataUrl) {
-      var arr = opts.dataUrl.split(",");
-      var bstr = atob(arr[1]);
-      var u8arr = new Uint8Array(bstr.length);
-      for (var i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-      blob = new Blob([u8arr], { type: opts.mime || "image/jpeg" });
+    // base64 추출
+    var base64 = opts.base64 || "";
+    if (!base64 && opts.dataUrl) {
+      base64 = opts.dataUrl.split(",").slice(1).join(",");
     }
-    if (!blob) throw new Error("업로드할 데이터 없음");
+    if (!base64) throw new Error("base64 empty");
 
-    var snapshot = await storageRef.put(blob, { contentType: opts.mime || "image/jpeg" });
-    var url = await snapshot.ref.getDownloadURL();
-    if (!url) throw new Error("다운로드 URL 없음");
+    var body = new URLSearchParams();
+    body.append("mode", "social_upload_image");
+    body.append("mime", opts.mime || "image/jpeg");
+    body.append("data", base64);
+    body.append("user_id", opts.user_id || "");
+    body.append("nickname", opts.nickname || "");
+    body.append("ts", String(opts.ts || Date.now()));
+
+    var res = await fetch(window.SHEET_IMAGE_UPLOAD_URL, { method: "POST", body: body });
+    var txt = await res.text();
+    var json = {};
+    try { json = JSON.parse(txt || "{}"); } catch (e) {}
+    if (!res.ok || !json || !json.ok) {
+      throw new Error((json && json.error) ? json.error : "upload failed");
+    }
+    var url = json.url || json.image_url || "";
+    if (!url) throw new Error("no url returned");
     return { url: url };
   }
 
@@ -171,8 +175,9 @@
           var base64 = resized.dataUrl.split(",").slice(1).join(",");
           if (!base64) throw new Error("base64 empty");
 
+          var base64 = resized.dataUrl.split(",").slice(1).join(",");
           var result = await uploadToStorage({
-            blob: resized.blob,
+            base64: base64,
             dataUrl: resized.dataUrl,
             mime: resized.mime || "image/jpeg",
             user_id: user_id,
