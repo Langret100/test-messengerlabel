@@ -1189,18 +1189,20 @@ var NotifySetting = (function () {
     overlay.appendChild(img);
     overlay.appendChild(nameEl);
 
-    // 상태메시지
-    var statusMsg = (window.ProfileManager && window.ProfileManager.getStatusMsg)
-      ? window.ProfileManager.getStatusMsg(nickname) : "";
-    if (statusMsg) {
-      var statusEl = document.createElement("div");
-      statusEl.textContent = statusMsg;
-      statusEl.style.cssText = "color:rgba(255,255,255,0.82);font-size:13px;margin-top:6px;max-width:min(260px,76vw);text-align:center;line-height:1.5;word-break:break-all;text-shadow:0 1px 3px rgba(0,0,0,0.4);";
-      overlay.appendChild(statusEl);
-    }
+    // 상태메시지 영역 (비동기 로드)
+    var statusEl = document.createElement("div");
+    statusEl.style.cssText = "color:rgba(255,255,255,0.82);font-size:13px;margin-top:6px;max-width:min(260px,76vw);text-align:center;line-height:1.5;word-break:break-all;text-shadow:0 1px 3px rgba(0,0,0,0.4);min-height:18px;";
+    overlay.appendChild(statusEl);
 
     overlay.addEventListener("click", function () { overlay.remove(); });
     document.body.appendChild(overlay);
+
+    // 클릭 시에만 statusMsg 불러옴 (서버 부담 최소화)
+    if (window.ProfileManager && typeof window.ProfileManager.fetchStatusMsg === "function") {
+      window.ProfileManager.fetchStatusMsg(nickname, function (msg) {
+        if (msg && overlay.parentNode) statusEl.textContent = msg;
+      });
+    }
   }
 
   function appendNewMessage(msg) {

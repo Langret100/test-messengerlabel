@@ -91,15 +91,14 @@
         if (!cc[nickname]) cc[nickname] = {};
         cc[nickname].imgLocal   = imgData;
         cc[nickname].imgUrl     = val.imgUrl || "";
-        cc[nickname].statusMsg  = val.statusMsg || "";
-        cc[nickname].profileTs  = Number(val.ts || 0); // 서버 변경 시각
-        cc[nickname].ts         = Date.now();           // 로컬 캐시 저장 시각
+        // statusMsg는 별도 fetchStatusMsg로만 가져옴 (클릭 시에만)
+        cc[nickname].profileTs  = Number(val.ts || 0);
+        cc[nickname].ts         = Date.now();
         saveProfiles(cc);
 
         applyProfileToDOM(nickname, imgData);
       }).catch(function () {});
     }).catch(function () {
-      // ts 조회 실패 시 풀 다운로드로 폴백
       ref.once("value").then(function (snap) {
         var val = snap.val();
         if (!val) return;
@@ -268,7 +267,7 @@
       "<input id='pmImgInput' type='file' accept='image/*' style='display:none'></div>",
       "<div style='display:flex;flex-direction:column;gap:6px;'>",
       "<span style='font-size:13px;font-weight:700;color:#374151;'>상태메시지</span>",
-      "<textarea id='pmStatusInput' maxlength='200' placeholder='상태메시지를 입력하세요 (200자 이내)' style='width:100%;height:64px;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit;color:#374151;'>" + (getStatusMsg(me) || "") + "</textarea></div>",
+      "<textarea id='pmStatusInput' maxlength='100' placeholder='상태메시지를 입력하세요 (100자 이내)' style='width:100%;height:64px;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit;color:#374151;'>" + (getStatusMsg(me) || "") + "</textarea></div>",
       "<div style='display:flex;flex-direction:column;gap:6px;'>",
       "<span style='font-size:13px;font-weight:700;color:#374151;'>채팅 배경</span>",
       "<div style='display:flex;gap:8px;'>",
@@ -290,6 +289,17 @@
     var close = function () { overlay.style.display = "none"; };
     document.getElementById("pmClose").addEventListener("click", close);
     overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+
+    // 모달 열릴 때 서버에서 최신 statusMsg 가져와 반영
+    fetchStatusMsg(me, function (msg) {
+      var ta = document.getElementById("pmStatusInput");
+      if (ta && !ta.dataset.edited) ta.value = msg || "";
+    });
+    // 사용자가 직접 수정하면 서버값으로 덮어쓰지 않음
+    setTimeout(function () {
+      var ta = document.getElementById("pmStatusInput");
+      if (ta) ta.addEventListener("input", function () { ta.dataset.edited = "1"; });
+    }, 100);
 
     var pendingImg = null;
     document.getElementById("pmImgBtn").addEventListener("click", function () {
@@ -347,7 +357,7 @@
     document.getElementById("pmSave").addEventListener("click", function () {
       var st = document.getElementById("pmStatus");
       var statusInputEl = document.getElementById("pmStatusInput");
-      var newStatusMsg = statusInputEl ? statusInputEl.value.slice(0, 200) : "";
+      var newStatusMsg = statusInputEl ? statusInputEl.value.slice(0, 100) : "";
       st.textContent = "저장 중...";
       setMyBg(me, pendingBg);
       applyBackground(me);
@@ -522,16 +532,46 @@
       try {
         var db = firebase.database();
         var safe = String(nickname).replace(/[.#$\[\]\/]/g, "_");
-        db.ref("profiles/" + safe + "/statusMsg").set(String(statusMsg || ""))
+        var newTs = Date.now();
+        db.ref("profiles/" + safe).update({ statusMsg: String(statusMsg || ""), ts: newTs })
           .then(function () {
-            // 로컬 캐시 갱신
             var profs = loadProfiles();
             if (!profs[nickname]) profs[nickname] = {};
             profs[nickname].statusMsg = String(statusMsg || "");
+            profs[nickname].profileTs = newTs;
+            profs[nickname].ts = Date.now();
             saveProfiles(profs);
             resolve();
           }).catch(reject);
       } catch (e) { reject(e); }
+    });
+  }
+
+  var STATUS_CACHE_TTL = 60 * 60 * 1000; // 1시간
+
+  // 프로필 클릭 시에만 호출 - statusMsg만 가져옴
+  function fetchStatusMsg(nickname, callback) {
+    if (!nickname) { callback && callback(""); return; }
+    var profs = loadProfiles();
+    var cached = profs[nickname];
+    // 1시간 이내 캐시 있으면 바로 반환
+    if (cached && cached.statusMsgTs &&
+        (Date.now() - cached.statusMsgTs) < STATUS_CACHE_TTL) {
+      callback && callback(cached.statusMsg || "");
+      return;
+    }
+    var ref = fbProfileRef(nickname);
+    if (!ref) { callback && callback(""); return; }
+    ref.child("statusMsg").once("value").then(function (snap) {
+      var msg = snap.val() || "";
+      var cc = loadProfiles();
+      if (!cc[nickname]) cc[nickname] = {};
+      cc[nickname].statusMsg   = String(msg);
+      cc[nickname].statusMsgTs = Date.now();
+      saveProfiles(cc);
+      callback && callback(String(msg));
+    }).catch(function () {
+      callback && callback("");
     });
   }
 
@@ -544,6 +584,7 @@
   window.ProfileManager = {
     getAvatarUrl:         getAvatarUrl,
     getStatusMsg:         getStatusMsg,
+    fetchStatusMsg:       fetchStatusMsg,
     saveStatusMsg:        saveStatusMsg,
     fetchAndCacheProfile: fetchAndCacheProfile,
     refreshAllAvatars:    refreshAllAvatars,
