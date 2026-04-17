@@ -216,3 +216,75 @@ function cleanupFirebaseStorage() {
   //    (Apps Script에서는 Firebase REST API로 구현 가능)
 }
 */
+
+/**
+ * ============================================================
+ * [필수 패치] social_upload_image / social_upload_file
+ * ============================================================
+ * 채팅 이미지/파일 전송 기능에 필요합니다.
+ * 기존 doPost(e)에 아래 case가 없다면 추가하세요.
+ * 이미 있다면 건너뛰세요.
+ *
+ * ※ "액세스가 거부됨: DriveApp" 오류가 날 경우:
+ *    Apps Script 편집기 → 배포 → 배포 관리 → 수정(연필 아이콘)
+ *    → "다음 사용자로 실행: 나(본인)" 확인 → 새 버전으로 재배포
+ *    → 권한 승인 팝업에서 DriveApp 허용
+ * ============================================================
+ */
+
+// doPost(e) 내부에 추가:
+
+case "social_upload_image": {
+  var base64Data = params.data || "";
+  var mimeType   = params.mime || "image/jpeg";
+  var nickName   = params.nickname || "unknown";
+  var userId     = params.user_id  || "";
+  var tsVal      = params.ts       || String(Date.now());
+
+  if (!base64Data) return jsonResponse({ ok: false, error: "no image data" });
+
+  try {
+    var imgFolder = getOrCreateFolder("messenger_images");
+    var imgFileName = userId + "_" + tsVal + ".jpg";
+    var imgBlob = Utilities.newBlob(
+      Utilities.base64Decode(base64Data),
+      mimeType,
+      imgFileName
+    );
+    var imgFile = imgFolder.createFile(imgBlob);
+    imgFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var imgFileId = imgFile.getId();
+    var imgPublicUrl = "https://drive.google.com/uc?export=view&id=" + imgFileId;
+    return jsonResponse({ ok: true, url: imgPublicUrl });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e.message || e) });
+  }
+}
+
+case "social_upload_file": {
+  var fileBase64 = params.data     || "";
+  var fileMime   = params.mime     || "application/octet-stream";
+  var fileName   = params.filename || "file";
+  var fileUserId = params.user_id  || "";
+  var fileTs     = params.ts       || String(Date.now());
+
+  if (!fileBase64) return jsonResponse({ ok: false, error: "no file data" });
+
+  try {
+    var fileFolder = getOrCreateFolder("messenger_files");
+    var safeFileName = fileTs + "_" + fileName.replace(/[^a-zA-Z0-9가-힣._\-]/g, "_");
+    var fileBlob = Utilities.newBlob(
+      Utilities.base64Decode(fileBase64),
+      fileMime,
+      safeFileName
+    );
+    var driveFile = fileFolder.createFile(fileBlob);
+    driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var driveFileId = driveFile.getId();
+    // 파일은 다운로드 링크 반환
+    var filePublicUrl = "https://drive.google.com/uc?export=download&id=" + driveFileId;
+    return jsonResponse({ ok: true, url: filePublicUrl });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e.message || e) });
+  }
+}

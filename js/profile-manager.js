@@ -262,6 +262,7 @@
       "<div style='text-align:center;'>",
       "<div style='font-size:14px;font-weight:800;color:#111827;'>" + me + "</div>",
       "<div style='font-size:11px;color:#6b7280;margin-top:2px;'>아이디: " + ((window.currentUser && window.currentUser.user_id) ? String(window.currentUser.user_id) : (function(){ try{ var u=JSON.parse(localStorage.getItem('ghostUser')||'{}'); return u.user_id||'-'; }catch(e){return '-';} })()) + "</div>",
+      "<div id='pmCoinDisplay' style='display:inline-flex;align-items:center;gap:5px;margin-top:5px;padding:3px 10px;background:#fef9ee;border:1px solid #f0d070;border-radius:20px;font-size:12px;font-weight:700;color:#b07800;'>🪙 <span id='pmCoinText'>불러오는 중...</span></div>",
       "</div>",
       "<button id='pmImgBtn' type='button' style='border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:10px;padding:6px 14px;font-size:13px;cursor:pointer;'>프로필 이미지 변경</button>",
       "<input id='pmImgInput' type='file' accept='image/*' style='display:none'></div>",
@@ -300,6 +301,27 @@
       var ta = document.getElementById("pmStatusInput");
       if (ta) ta.addEventListener("input", function () { ta.dataset.edited = "1"; });
     }, 100);
+
+    // 코인 표시 로드
+    (function () {
+      var coinEl = document.getElementById("pmCoinText");
+      if (!coinEl) return;
+      var userId = (window.currentUser && window.currentUser.user_id)
+        ? String(window.currentUser.user_id) : "";
+      if (!userId) { coinEl.textContent = "로그인 필요"; return; }
+      var apiUrl = window.SHEET_WRITE_URL || "";
+      if (!apiUrl) { coinEl.textContent = "-"; return; }
+      var sep = apiUrl.indexOf("?") >= 0 ? "&" : "?";
+      fetch(apiUrl + sep + "mode=coin_status&user_id=" + encodeURIComponent(userId) + "&t=" + Date.now())
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+          if (!json || json.ok === false) { coinEl.textContent = "0"; return; }
+          var coin = Math.max(0, parseInt(json.coin, 10) || 0);
+          var limit = parseInt(json.limit, 10) || 100;
+          coinEl.textContent = (coin >= limit ? "MAX" : coin) + " / " + limit;
+        })
+        .catch(function () { coinEl.textContent = "연결 오류"; });
+    })();
 
     var pendingImg = null;
     document.getElementById("pmImgBtn").addEventListener("click", function () {
