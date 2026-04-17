@@ -130,13 +130,13 @@
 
     var res = await fetch(window.SHEET_IMAGE_UPLOAD_URL, { method: "POST", body: body });
     var txt = await res.text();
+    console.log("[chat-photo] 응답:", txt.slice(0, 300));
     var json = {};
-    try { json = JSON.parse(txt || "{}"); } catch (e) {}
-    if (!res.ok || !json || !json.ok) {
-      throw new Error((json && json.error) ? json.error : "upload failed");
+    try { json = JSON.parse(txt || "{}"); } catch (e) { console.warn("[chat-photo] JSON파싱실패:", txt.slice(0,200)); }
+    var url = json.url || json.image_url || json.fileUrl || json.link || json.downloadUrl || "";
+    if (!url) {
+      throw new Error((json && json.error) ? json.error : "no url in response: " + txt.slice(0, 150));
     }
-    var url = json.url || json.image_url || "";
-    if (!url) throw new Error("no url returned");
     return { url: url };
   }
 
@@ -175,7 +175,6 @@
           var base64 = resized.dataUrl.split(",").slice(1).join(",");
           if (!base64) throw new Error("base64 empty");
 
-          var base64 = resized.dataUrl.split(",").slice(1).join(",");
           var result = await uploadToStorage({
             base64: base64,
             dataUrl: resized.dataUrl,

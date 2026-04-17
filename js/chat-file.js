@@ -61,11 +61,11 @@
     var txt = await res.text();
     var json = {};
     try { json = JSON.parse(txt || "{}"); } catch (e) {}
-    if (!res.ok || !json || !json.ok) {
-      throw new Error((json && json.error) ? json.error : "upload failed");
+    console.log("[chat-file] 응답:", txt.slice(0, 300));
+    var url = json.url || json.file_url || json.fileUrl || json.image_url || json.link || json.downloadUrl || "";
+    if (!url) {
+      throw new Error((json && json.error) ? json.error : "no url in response: " + txt.slice(0, 150));
     }
-    var url = json.url || json.file_url || "";
-    if (!url) throw new Error("no url returned");
     return { url: url };
   }
 
