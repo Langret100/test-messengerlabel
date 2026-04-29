@@ -195,6 +195,15 @@
     saveUnreadCounts(counts);
     _applyBadge();
     _updateRoomBadgeUI(roomId, 0);
+    // 모든 방 읽었으면 SW 배지도 완전 초기화
+    if (getTotalUnread() === 0) {
+      try {
+        if (swReg && swReg.active) {
+          swReg.active.postMessage({ type: "CLEAR_BADGE" });
+        }
+        if (navigator.clearAppBadge) navigator.clearAppBadge();
+      } catch (e) {}
+    }
   }
 
   /* 전체 미확인 수 합산 */

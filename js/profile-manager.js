@@ -158,7 +158,8 @@
           imgBase64: finalDataUrl,
           nickname:  nickname,
           statusMsg: statusMsg,
-          ts:        Date.now()
+          ts:        Date.now(),
+          lastSeen:  Date.now()
         };
 
         db.ref("profiles/" + safe).set(payload)
@@ -278,6 +279,8 @@
       "<input id='pmBgInput' type='file' accept='image/*' style='display:none'></div>",
       "<button id='pmSave' type='button' style='border:0;background:#2563eb;color:#fff;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;'>저장</button>",
       "<div id='pmStatus' style='font-size:12px;color:#6b7280;text-align:center;min-height:16px;'></div>",
+      /* 알림 통합 버튼 (앱 내 소리 + FCM 푸시 알림 한번에) */
+      "<button id='pmNotifyBtn' type='button' style='width:100%;border:1px solid #f59e0b;background:#fffbeb;color:#b45309;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:6px;'>🔔 알림 허용</button>",
       /* 하단 버튼 행: 웹앱 추가 + 로그아웃 */
       "<div style='display:flex;gap:8px;'>",
       "  <button id='pwaInstallBtn' type='button' style='flex:1;border:1px solid #16a34a;background:#f0fdf4;color:#16a34a;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;'>📱 바탕화면에 추가</button>",
@@ -306,21 +309,36 @@
     (function () {
       var coinEl = document.getElementById("pmCoinText");
       if (!coinEl) return;
-      var userId = (window.currentUser && window.currentUser.user_id)
-        ? String(window.currentUser.user_id) : "";
-      if (!userId) { coinEl.textContent = "로그인 필요"; return; }
-      var apiUrl = window.SHEET_WRITE_URL || "";
-      if (!apiUrl) { coinEl.textContent = "-"; return; }
+
+      // user_id를 여러 경로로 확인 (safeMyNickname과 동일한 방식)
+      var userId = "";
+      try {
+        if (window.currentUser && window.currentUser.user_id) {
+          userId = String(window.currentUser.user_id);
+        } else {
+          var raw = localStorage.getItem("ghostUser");
+          if (raw) {
+            var u = JSON.parse(raw);
+            if (u && u.user_id) userId = String(u.user_id);
+          }
+        }
+      } catch (e) {}
+
+      if (!userId) { coinEl.textContent = "0"; return; }
+
+      var apiUrl = window.SHEET_WRITE_URL || window.SHEET_IMAGE_UPLOAD_URL || "";
+      if (!apiUrl) { coinEl.textContent = "0"; return; }
       var sep = apiUrl.indexOf("?") >= 0 ? "&" : "?";
       fetch(apiUrl + sep + "mode=coin_status&user_id=" + encodeURIComponent(userId) + "&t=" + Date.now())
         .then(function (r) { return r.json(); })
         .then(function (json) {
-          if (!json || json.ok === false) { coinEl.textContent = "0"; return; }
+          if (!json) { coinEl.textContent = "0"; return; }
+          // ok 필드 없어도 coin 필드가 있으면 표시
           var coin = Math.max(0, parseInt(json.coin, 10) || 0);
           var limit = parseInt(json.limit, 10) || 100;
-          coinEl.textContent = (coin >= limit ? "MAX" : coin) + " / " + limit;
+          coinEl.textContent = (coin >= limit ? "MAX" : String(coin)) + " / " + limit;
         })
-        .catch(function () { coinEl.textContent = "연결 오류"; });
+        .catch(function () { coinEl.textContent = "0"; });
     })();
 
     var pendingImg = null;
@@ -477,6 +495,105 @@
       });
     }
 
+    /* 알림 통합 버튼 — localStorage 직접 제어 (NotifySetting은 iframe 안이라 접근 불가) */
+    var notifyBtn = document.getElementById("pmNotifyBtn");
+    if (notifyBtn) {
+      var NOTIFY_KEY = "mypai_notify_enabled";
+
+      function isNotifyOn() {
+        try { return localStorage.getItem(NOTIFY_KEY) !== "0"; } catch(e) { return true; }
+      }
+      function setNotifyOn(v) {
+        try { localStorage.setItem(NOTIFY_KEY, v ? "1" : "0"); } catch(e) {}
+      }
+
+      // file:// 환경 감지 (로컬 실행 시 Notification API 동작 불가)
+      var isFileProtocol = (location.protocol === "file:");
+
+      function refreshNotifyBtn() {
+        if (!("Notification" in window)) {
+          notifyBtn.textContent = "🔕 알림 미지원 브라우저";
+          notifyBtn.disabled = true; notifyBtn.style.opacity = "0.5"; return;
+        }
+        // file:// 환경에서는 권한 요청 불가 — 앱 내 소리 알림(ON/OFF)만 제공
+        if (isFileProtocol) {
+          var on = isNotifyOn();
+          notifyBtn.disabled = false; notifyBtn.style.opacity = "1";
+          if (on) {
+            notifyBtn.textContent = "🔔 앱 알림음 켜짐 (탭하면 끄기)";
+            notifyBtn.style.background = "#f0fdf4";
+            notifyBtn.style.borderColor = "#16a34a";
+            notifyBtn.style.color = "#16a34a";
+          } else {
+            notifyBtn.textContent = "🔕 앱 알림음 꺼짐 (탭하면 켜기)";
+            notifyBtn.style.background = "#f1f5f9";
+            notifyBtn.style.borderColor = "#94a3b8";
+            notifyBtn.style.color = "#64748b";
+          }
+          return;
+        }
+        var perm = Notification.permission;
+        var on = isNotifyOn();
+        notifyBtn.disabled = false; notifyBtn.style.opacity = "1";
+
+        if (perm === "denied") {
+          notifyBtn.textContent = "🔕 알림 차단됨 — 브라우저 설정에서 허용";
+          notifyBtn.disabled = true; notifyBtn.style.opacity = "0.6";
+        } else if (perm === "granted" && on) {
+          notifyBtn.textContent = "🔔 알림 켜짐 (탭하면 끄기)";
+          notifyBtn.style.background = "#f0fdf4";
+          notifyBtn.style.borderColor = "#16a34a";
+          notifyBtn.style.color = "#16a34a";
+        } else if (perm === "granted" && !on) {
+          notifyBtn.textContent = "🔕 알림 꺼짐 (탭하면 켜기)";
+          notifyBtn.style.background = "#f1f5f9";
+          notifyBtn.style.borderColor = "#94a3b8";
+          notifyBtn.style.color = "#64748b";
+        } else {
+          notifyBtn.textContent = "🔔 알림 허용";
+          notifyBtn.style.background = "#fffbeb";
+          notifyBtn.style.borderColor = "#f59e0b";
+          notifyBtn.style.color = "#b45309";
+        }
+      }
+      refreshNotifyBtn();
+
+      notifyBtn.addEventListener("click", function () {
+        // file:// 환경: 앱 내 알림음만 토글
+        if (isFileProtocol) {
+          var next = !isNotifyOn();
+          setNotifyOn(next);
+          refreshNotifyBtn();
+          return;
+        }
+
+        var perm = ("Notification" in window) ? Notification.permission : "unsupported";
+
+        if (perm === "granted") {
+          // 켜짐/꺼짐 토글
+          var next = !isNotifyOn();
+          setNotifyOn(next);
+          if (next && window.FcmPush && typeof window.FcmPush.init === "function") {
+            window.FcmPush.init();
+          }
+          refreshNotifyBtn();
+          return;
+        }
+
+        if (perm === "default") {
+          Notification.requestPermission().then(function (result) {
+            if (result === "granted") {
+              setNotifyOn(true);
+              if (window.FcmPush && typeof window.FcmPush.init === "function") {
+                window.FcmPush.init();
+              }
+            }
+            refreshNotifyBtn();
+          });
+        }
+      });
+    }
+
     /* 로그아웃 버튼 */
     var logoutBtn = document.getElementById("pmLogoutBtn");
     if (logoutBtn) {
@@ -507,7 +624,7 @@
     if (!topbar || document.getElementById("profileGearBtn")) return;
     var btn = document.createElement("button");
     btn.id = "profileGearBtn"; btn.type = "button"; btn.title = "프로필/배경 설정";
-    btn.style.cssText = "position:absolute;right:10px;top:50%;transform:translateY(-50%);border:0;background:transparent;padding:0;cursor:pointer;line-height:0;";
+    btn.style.cssText = "position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:transparent;padding:0;cursor:pointer;line-height:0;";
 
     var img = document.createElement("img");
     img.id = "profileGearImg";
@@ -540,6 +657,10 @@
         applyBackground(nick);
         fetchAndCacheProfile(nick);
         injectGearButton();
+        // lastSeen 갱신 — 30일 미접속 프로필 정리용
+        updateLastSeen(nick);
+        // 30일 지난 미접속 프로필 정리 (로그인 시 1회)
+        setTimeout(pruneInactiveProfiles, 5000);
         // 프로필 이미지 로컬 캐시 로드 후 버튼 갱신
         setTimeout(function () { refreshGearButton(nick); }, 300);
       } catch (e) {}
@@ -547,6 +668,39 @@
   }
 
 
+
+  /* ── 접속 시각 갱신 ── */
+  function updateLastSeen(nickname) {
+    if (!nickname) return;
+    try {
+      var db = firebase.database();
+      var safe = nickname.replace(/[.#$\[\]]/g, "_");
+      db.ref("profiles/" + safe).update({ lastSeen: Date.now() });
+    } catch (e) {}
+  }
+
+  /* ── 30일 미접속 프로필 삭제 ── */
+  function pruneInactiveProfiles() {
+    try {
+      var db = firebase.database();
+      var cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+      db.ref("profiles").once("value").then(function (snap) {
+        if (!snap.exists()) return;
+        var updates = {};
+        snap.forEach(function (child) {
+          var v = child.val() || {};
+          // lastSeen 없으면 ts(저장 시각) 사용, 그것도 없으면 삭제 안 함
+          var lastActive = v.lastSeen || v.ts || null;
+          if (lastActive && lastActive < cutoff) {
+            updates[child.key] = null;
+          }
+        });
+        if (Object.keys(updates).length > 0) {
+          db.ref("profiles").update(updates).catch(function(){});
+        }
+      }).catch(function(){});
+    } catch (e) {}
+  }
 
   function saveStatusMsg(nickname, statusMsg) {
     return new Promise(function (resolve, reject) {

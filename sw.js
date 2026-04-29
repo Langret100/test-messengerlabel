@@ -1,14 +1,52 @@
 /* ============================================================
-   [sw.js] Service Worker - 마이메신저 PWA
+   Firebase Messaging SDK - 백그라운드 푸시 수신용
+   ============================================================ */
+importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
+
+firebase.initializeApp({
+  apiKey: "__FIREBASE_API_KEY__",
+  authDomain: "web-ghost-c447b.firebaseapp.com",
+  databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
+  projectId: "web-ghost-c447b",
+  storageBucket: "web-ghost-c447b.firebasestorage.app",
+  messagingSenderId: "198377381878",
+  appId: "1:198377381878:web:83b56b1b4d63138d27b1d7"
+});
+
+var messaging = firebase.messaging();
+
+// 백그라운드 푸시 수신 (앱이 꺼져 있을 때)
+messaging.onBackgroundMessage(function(payload) {
+  var title  = (payload.notification && payload.notification.title)  || '마이파이';
+  var body   = (payload.notification && payload.notification.body)   || '새 메시지가 있어요.';
+  var roomId = (payload.data && payload.data.room_id) || '';
+  var icon   = './images/icons/icon-192x192.png';
+  var badge  = './images/icons/icon-192x192.png';
+
+  self.registration.showNotification(title, {
+    body:     body,
+    icon:     icon,
+    badge:    badge,
+    tag:      'mypai-msg-' + (roomId || 'global'),
+    renotify: true,
+    vibrate:  [200, 100, 200],
+    data:     { roomId: roomId, url: './' }
+  });
+});
+
+/* ============================================================
+   [sw.js] Service Worker - 마이파이 PWA
    ============================================================ */
 
-var CACHE_NAME = "mypai-v3";
+var CACHE_NAME = "mypai-v4";
 var CACHE_URLS = [
   "./games/social-messenger.html",
   "./js/config.js",
   "./js/profile-manager.js",
   "./js/pwa-manager.js",
   "./js/social-messenger.js",
+  "./js/fcm-push.js",
   "./images/icons/icon-192x192.png",
   "./images/icons/favicon-32x32.png",
   "./images/icons/favicon.ico"
@@ -36,21 +74,17 @@ self.addEventListener("activate", function (e) {
 });
 
 self.addEventListener("fetch", function (e) {
-  // GET 요청만 캐시 처리, 나머지는 그냥 통과
   if (e.request.method !== "GET") return;
-
-  // Apps Script / Firebase 요청은 캐시 안 함
   var url = e.request.url;
   if (url.indexOf("script.google.com") > -1 ||
       url.indexOf("firebaseio.com") > -1 ||
-      url.indexOf("googleapis.com") > -1) {
+      url.indexOf("googleapis.com") > -1 ||
+      url.indexOf("gstatic.com") > -1) {
     return;
   }
-
   e.respondWith(
     fetch(e.request)
       .then(function (res) {
-        // 유효한 응답만 캐시
         if (res && res.status === 200 && res.type === "basic") {
           var clone = res.clone();
           caches.open(CACHE_NAME).then(function (cache) {
@@ -61,17 +95,83 @@ self.addEventListener("fetch", function (e) {
       })
       .catch(function () {
         return caches.match(e.request).then(function (cached) {
-          // 캐시에도 없으면 빈 Response 반환 (TypeError 방지)
-          return cached || new Response("", {
-            status: 503,
-            statusText: "Offline"
-          });
+          return cached || new Response("", { status: 503, statusText: "Offline" });
         });
       })
   );
 });
 
-/* ── 앱 배지 업데이트 (클라이언트 postMessage) ── */
+/* ════════════════════════════════════════════════════════
+   FCM 푸시 메시지 수신
+   ════════════════════════════════════════════════════════ */
+self.addEventListener("push", function (e) {
+  if (!e.data) return;
+
+  var data;
+  try { data = e.data.json(); } catch (err) { data = { title: "마이파이", body: e.data.text() }; }
+
+  var title   = data.title || "마이파이";
+  var body    = data.body  || "새 메시지가 있어요.";
+  var roomId  = data.room_id || "";
+  var count   = Number(data.unread || 1);
+  var icon    = "./images/icons/icon-192x192.png";
+  var badge   = "./images/icons/icon-192x192.png";
+  var tag     = "mypai-msg-" + (roomId || "global");
+
+  var opts = {
+    body:    body,
+    icon:    icon,
+    badge:   badge,
+    tag:     tag,
+    renotify: true,
+    silent:  false,
+    vibrate: [200, 100, 200],
+    data:    { roomId: roomId, url: "./" }
+  };
+
+  e.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, opts),
+      // 앱 배지 업데이트
+      (self.navigator && self.navigator.setAppBadge)
+        ? self.navigator.setAppBadge(count)
+        : Promise.resolve(),
+      // 열려있는 클라이언트에 배지 카운트 전달
+      self.clients.matchAll({ includeUncontrolled: true }).then(function (clients) {
+        clients.forEach(function (client) {
+          client.postMessage({ type: "FCM_PUSH_RECEIVED", roomId: roomId, count: count });
+        });
+      })
+    ])
+  );
+});
+
+/* ── 알림 클릭 → 앱 열기 + 해당 방으로 이동 ── */
+self.addEventListener("notificationclick", function (e) {
+  e.notification.close();
+  var roomId = (e.notification.data && e.notification.data.roomId) || "";
+  var targetUrl = (e.notification.data && e.notification.data.url) || "./";
+
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clients) {
+      // 이미 앱 창이 열려있으면 포커스 + 방 이동 메시지
+      for (var i = 0; i < clients.length; i++) {
+        var c = clients[i];
+        if (c.url.indexOf(targetUrl.replace("./", "")) > -1 && "focus" in c) {
+          c.focus();
+          if (roomId) c.postMessage({ type: "FCM_OPEN_ROOM", roomId: roomId });
+          return;
+        }
+      }
+      // 앱이 닫혀있으면 새로 열기
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl + (roomId ? "#room=" + roomId : ""));
+      }
+    })
+  );
+});
+
+/* ── 앱 배지 제어 (클라이언트 postMessage) ── */
 self.addEventListener("message", function (e) {
   if (!e.data) return;
   var count = Number(e.data.count) || 0;
