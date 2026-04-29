@@ -197,12 +197,8 @@
     _updateRoomBadgeUI(roomId, 0);
     // 모든 방 읽었으면 SW 배지도 완전 초기화
     if (getTotalUnread() === 0) {
-      try {
-        if (swReg && swReg.active) {
-          swReg.active.postMessage({ type: "CLEAR_BADGE" });
-        }
-        if (navigator.clearAppBadge) navigator.clearAppBadge();
-      } catch (e) {}
+      _postToSW({ type: "CLEAR_BADGE" });
+      try { if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) {}
     }
   }
 
@@ -212,16 +208,22 @@
     return Object.keys(counts).reduce(function (sum, k) { return sum + (counts[k] || 0); }, 0);
   }
 
+  /* SW에 메시지 전송 (controller 우선, swReg.active fallback) */
+  function _postToSW(msg) {
+    try {
+      var sw = (navigator.serviceWorker && navigator.serviceWorker.controller)
+               || (swReg && swReg.active)
+               || null;
+      if (sw) sw.postMessage(msg);
+    } catch (e) {}
+  }
+
   /* 앱 배지 실제 적용 */
   function _applyBadge() {
     var total = getTotalUnread();
     // 1) SW를 통한 앱 배지 (PWA 설치 상태일 때 앱 아이콘에 표시)
-    if (swReg && swReg.active) {
-      try {
-        swReg.active.postMessage({ type: "SET_BADGE", count: total });
-      } catch (e) {}
-    }
-    // 2) 직접 API (일부 브라우저)
+    _postToSW({ type: "SET_BADGE", count: total });
+    // 2) 직접 API (일부 브라우저 - SW 없이도 동작)
     try {
       if (navigator.setAppBadge) {
         total > 0 ? navigator.setAppBadge(total) : navigator.clearAppBadge();
@@ -271,6 +273,16 @@
     // Service Worker 등록
     registerSW().then(function () {
       restoreAllBadgeUI();
+      // SW 등록 완료 후 controller가 세팅될 때까지 약간 대기 후 배지 재동기화
+      setTimeout(function () {
+        _applyBadge();
+        // FCM 토큰 초기화 (login.js가 없는 환경 대응)
+        try {
+          if (window.FcmPush && typeof window.FcmPush.init === "function") {
+            window.FcmPush.init();
+          }
+        } catch (e) {}
+      }, 1500);
     });
 
     // beforeinstallprompt 캐치 (Android Chrome 등)
@@ -303,6 +315,19 @@
         if (roomId) clearUnread(roomId);
       } catch (e) {}
     });
+
+    // SW로부터 FCM 푸시 수신 알림 (백그라운드 → 포그라운드 복귀 시)
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", function (ev) {
+        try {
+          var d = ev && ev.data;
+          if (!d) return;
+          if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
+            incrementUnread(d.roomId);
+          }
+        } catch (e) {}
+      });
+    }
   }
 
   window.PwaManager = {

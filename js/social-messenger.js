@@ -286,35 +286,59 @@ var NotifySound = (function () {
     });
   }
 
-  function playDdiring() {
-    if (!enabled) return false;
-    var c = ensureContext();
-    if (!c || !masterGain) return false;
-    tryResume();
-
-    var now = c.currentTime;
-    var scheduleTone = function (freq, t, dur) {
-      var osc = c.createOscillator();
-      var g = c.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, t);
-
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.8, t + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-
-      osc.connect(g);
-      g.connect(masterGain);
-      osc.start(t);
-      osc.stop(t + dur + 0.02);
-    };
-
-    scheduleTone(880, now + 0.00, 0.18);
-    scheduleTone(1320, now + 0.20, 0.22);
-    return true;
+  /* 진동 — 소리 꺼진 환경(무음 모드)에서 fallback */
+  function tryVibrate() {
+    try {
+      if (navigator.vibrate) {
+        navigator.vibrate([150, 80, 150]);
+        return true;
+      }
+    } catch (e) {}
+    return false;
   }
 
-  return { bindUserGesture: bindUserGesture, playDdiring: playDdiring };
+  function playDdiring() {
+    var soundPlayed = false;
+
+    if (enabled) {
+      var c = ensureContext();
+      if (c && masterGain) {
+        tryResume();
+
+        // 실제로 소리가 나오는지 확인 (AudioContext state)
+        if (c.state === "running") {
+          var now = c.currentTime;
+          var scheduleTone = function (freq, t, dur) {
+            var osc = c.createOscillator();
+            var g = c.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(freq, t);
+
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.8, t + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+            osc.connect(g);
+            g.connect(masterGain);
+            osc.start(t);
+            osc.stop(t + dur + 0.02);
+          };
+
+          scheduleTone(880,  now + 0.00, 0.18);
+          scheduleTone(1320, now + 0.20, 0.22);
+          soundPlayed = true;
+        }
+      }
+    }
+
+    // 소리가 재생됐어도 진동은 항상 시도 (무음모드 대응)
+    // soundPlayed가 false면 소리 없이 진동만
+    tryVibrate();
+
+    return soundPlayed;
+  }
+
+  return { bindUserGesture: bindUserGesture, playDdiring: playDdiring, tryVibrate: tryVibrate };
 })()
 
 var NotifySetting = (function () {
@@ -674,8 +698,11 @@ window.NotifySetting = NotifySetting; // profile-manager 등 외부에서 접근
             if (msg2.user_id && String(msg2.user_id) !== String(myId || "") &&
                 (Date.now() - subStartTs) > 1500) {
               if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
-                NotifySound.playDdiring();
+                NotifySound.playDdiring(); // 소리 + 진동 (내부에서 tryVibrate 포함)
                 if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg2);
+              } else {
+                // 알림 꺼져 있어도 진동은 항상 시도
+                if (NotifySound.tryVibrate) NotifySound.tryVibrate();
               }
             }
           } catch (eSound) {}
@@ -2086,7 +2113,7 @@ try {
                   } catch (ePwa) {}
 
                   if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
-                    NotifySound.playDdiring();
+                    NotifySound.playDdiring(); // 소리 + 진동
                     if (NotifySetting.maybeShow) {
                       NotifySetting.maybeShow({
                         room_id: info.roomId,

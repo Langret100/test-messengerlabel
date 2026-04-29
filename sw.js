@@ -130,19 +130,32 @@ self.addEventListener("push", function (e) {
   };
 
   e.waitUntil(
-    Promise.all([
-      self.registration.showNotification(title, opts),
-      // 앱 배지 업데이트
-      (self.navigator && self.navigator.setAppBadge)
-        ? self.navigator.setAppBadge(count)
-        : Promise.resolve(),
-      // 열려있는 클라이언트에 배지 카운트 전달
-      self.clients.matchAll({ includeUncontrolled: true }).then(function (clients) {
-        clients.forEach(function (client) {
-          client.postMessage({ type: "FCM_PUSH_RECEIVED", roomId: roomId, count: count });
-        });
-      })
-    ])
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clients) {
+      var isForeground = clients.some(function (c) {
+        return c.visibilityState === "visible";
+      });
+
+      var tasks = [];
+
+      // 앱이 백그라운드/종료 상태일 때만 시스템 알림 표시
+      if (!isForeground) {
+        tasks.push(self.registration.showNotification(title, opts));
+      }
+
+      // 앱 아이콘 배지 업데이트 (항상)
+      if (self.navigator && self.navigator.setAppBadge) {
+        tasks.push(
+          self.navigator.setAppBadge(count).catch(function(){})
+        );
+      }
+
+      // 열린 클라이언트에 배지 카운트 전달 (포그라운드 배지 갱신용)
+      clients.forEach(function (client) {
+        client.postMessage({ type: "FCM_PUSH_RECEIVED", roomId: roomId, count: count });
+      });
+
+      return Promise.all(tasks);
+    })
   );
 });
 
