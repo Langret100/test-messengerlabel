@@ -213,51 +213,39 @@ menu.appendChild(notifyBtn);
 })();
 
 var NotifySound = (function () {
-  var ctx = null;
-  var masterGain = null;
-  var keepAliveOsc = null;
-  var enabled = false;
-  var bound = false;
+  /* ── MP3 알람음 재생 모듈
+   * - HTML Audio 엘리먼트로 ../sound/alarm.mp3 재생 (AudioContext 사인파 대체)
+   * - 첫 사용자 제스처 이후 unlocked = true → 이후 자동 재생 가능
+   * - AudioContext는 visibilitychange resume 용도로만 유지
+   */
+  var unlocked = false;
+  var bound    = false;
+  var _audioEl = null; // 재사용 Audio 엘리먼트
 
-  function ensureContext() {
-    if (ctx) return ctx;
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    ctx = new AC();
-    masterGain = ctx.createGain();
-    masterGain.gain.value = 1.0;
-    masterGain.connect(ctx.destination);
-    return ctx;
-  }
-
-  function tryResume() {
+  /* 사용자 제스처 후 Audio 엘리먼트 unlock */
+  function _ensureAudio() {
+    if (_audioEl) return _audioEl;
     try {
-      var c = ensureContext();
-      if (!c) return;
-      if (c.state === "suspended") c.resume();
+      _audioEl = new Audio();
+      _audioEl.src    = "../sound/alarm.mp3";
+      _audioEl.volume = 0.65;          // 적정 볼륨 (귀에 부담 없는 수준)
+      _audioEl.preload = "auto";
+      // 무음 재생으로 unlock (제스처 이후 호출)
+      var p = _audioEl.play();
+      if (p && typeof p.then === "function") {
+        p.then(function () {
+          _audioEl.pause();
+          _audioEl.currentTime = 0;
+          unlocked = true;
+        }).catch(function () {});
+      }
     } catch (e) {}
-  }
-
-  function startKeepAlive() {
-    try {
-      var c = ensureContext();
-      if (!c || !masterGain) return;
-      if (keepAliveOsc) return;
-      keepAliveOsc = c.createOscillator();
-      var g = c.createGain();
-      g.gain.value = 0.00001;
-      keepAliveOsc.frequency.value = 1;
-      keepAliveOsc.connect(g);
-      g.connect(masterGain);
-      keepAliveOsc.start();
-    } catch (e) {}
+    return _audioEl;
   }
 
   function armByUserGesture() {
-    if (enabled) return;
-    tryResume();
-    enabled = true;
-    startKeepAlive();
+    if (unlocked) return;
+    _ensureAudio();
   }
 
   function bindUserGesture(target) {
@@ -280,30 +268,19 @@ var NotifySound = (function () {
     target.addEventListener("mousedown", once, { passive: true });
     target.addEventListener("click", once, { passive: true });
 
-    // 앱 포그라운드 복귀 시 AudioContext resume 시도
+    // 앱 포그라운드 복귀 시 unlock 재시도 (PWA 복귀 대응)
     document.addEventListener("visibilitychange", function () {
-      tryResume();
-      // 앱이 다시 보이면 enabled 강제 활성화 시도 (PWA 앱 복귀 대응)
-      if (!document.hidden && !enabled) {
-        var c = ensureContext();
-        if (c) {
-          c.resume().then(function () {
-            if (c.state === "running") {
-              enabled = true;
-              startKeepAlive();
-            }
-          }).catch(function(){});
-        }
+      if (!document.hidden && !unlocked) {
+        _ensureAudio();
       }
     });
 
-    // 페이지 포커스 시에도 resume 시도 (일부 Android 브라우저 대응)
     window.addEventListener("focus", function () {
-      tryResume();
+      if (!unlocked) _ensureAudio();
     });
   }
 
-  /* 진동 — 소리 꺼진 환경(무음 모드)에서 fallback */
+  /* 진동 — 무음 모드 fallback */
   function tryVibrate() {
     try {
       if (navigator.vibrate) {
@@ -317,34 +294,30 @@ var NotifySound = (function () {
   function playDdiring() {
     var soundPlayed = false;
 
-    // ── 소리 재생 (AudioContext가 running 상태일 때만)
-    if (enabled) {
-      var c = ensureContext();
-      if (c && masterGain) {
-        tryResume();
-        if (c.state === "running") {
-          var now = c.currentTime;
-          var scheduleTone = function (freq, t, dur) {
-            var osc = c.createOscillator();
-            var g = c.createGain();
-            osc.type = "sine";
-            osc.frequency.setValueAtTime(freq, t);
-            g.gain.setValueAtTime(0.0001, t);
-            g.gain.exponentialRampToValueAtTime(0.8, t + 0.01);
-            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-            osc.connect(g);
-            g.connect(masterGain);
-            osc.start(t);
-            osc.stop(t + dur + 0.02);
-          };
-          scheduleTone(880,  now + 0.00, 0.18);
-          scheduleTone(1320, now + 0.20, 0.22);
+    // ── MP3 알람음 재생
+    try {
+      var el = _audioEl || _ensureAudio();
+      if (el) {
+        el.volume = 0.65;
+        el.currentTime = 0;
+        var p = el.play();
+        if (p && typeof p.then === "function") {
+          p.then(function () {
+            unlocked = true;
+            soundPlayed = true;
+          }).catch(function (err) {
+            // 자동재생 정책 차단 시 AudioContext fallback
+            console.warn("[알람] MP3 재생 실패:", err.message || err);
+          });
+        } else {
           soundPlayed = true;
         }
       }
+    } catch (e) {
+      console.warn("[알람] 재생 오류:", e);
     }
 
-    // ── 진동은 enabled/소리 재생 여부와 무관하게 항상 시도
+    // ── 진동은 항상 시도
     tryVibrate();
 
     return soundPlayed;
@@ -712,10 +685,8 @@ window.NotifySetting = NotifySetting; // profile-manager 등 외부에서 접근
               if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
                 NotifySound.playDdiring(); // 소리 + 진동 (내부에서 tryVibrate 포함)
                 if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg2);
-              } else {
-                // 알림 꺼져 있어도 진동은 항상 시도
-                if (NotifySound.tryVibrate) NotifySound.tryVibrate();
               }
+              // 알림이 꺼진 경우 진동/소리 모두 생략
             }
           } catch (eSound) {}
 
@@ -2149,10 +2120,8 @@ try {
                         text:    _sig.text || "새 메시지"
                       });
                     }
-                  } else {
-                    // 알림 꺼져도 진동은 항상
-                    if (NotifySound.tryVibrate) NotifySound.tryVibrate();
                   }
+                  // 알림이 꺼진 경우 진동/소리 모두 생략
                 }
               });
             }

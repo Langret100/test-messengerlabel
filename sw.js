@@ -41,6 +41,7 @@ var CACHE_URLS = [
   "./js/pwa-manager.js",
   "./js/social-messenger.js",
   "./js/fcm-push.js",
+  "./sound/alarm.mp3",
   "./images/icons/icon-192x192.png",
   "./images/icons/favicon-32x32.png",
   "./images/icons/favicon.ico"
@@ -114,6 +115,10 @@ self.addEventListener("push", function (e) {
   // 배지 카운트 누적 (SW 내부 관리)
   _badgeCount += 1;
 
+  // scope 기준 절대경로 (notificationclick에서 PWA로 열기 위해 필수)
+  var scope   = self.registration.scope;
+  var appUrl  = scope + "games/social-messenger.html";
+
   var opts = {
     body:     body,
     icon:     icon,
@@ -122,7 +127,7 @@ self.addEventListener("push", function (e) {
     renotify: true,
     silent:   false,
     vibrate:  [200, 100, 200],
-    data:     { roomId: roomId, url: "./games/social-messenger.html" }
+    data:     { roomId: roomId, url: appUrl }
   };
 
   e.waitUntil(
@@ -153,29 +158,41 @@ self.addEventListener("push", function (e) {
   );
 });
 
-/* ── 알림 클릭 → 앱 열기 + 해당 방으로 이동 ── */
+/* ── 알림 클릭 → PWA 앱으로 열기 + 해당 방으로 이동 ── */
 self.addEventListener("notificationclick", function (e) {
   e.notification.close();
   var roomId = (e.notification.data && e.notification.data.roomId) || "";
-  var targetUrl = (e.notification.data && e.notification.data.url) || "./";
+
+  // SW 등록 scope 기준 절대경로 생성 (브라우저 열림 방지 핵심)
+  // self.registration.scope = "https://도메인/" (루트)
+  var scope = self.registration.scope; // 끝에 "/" 포함
+  var appUrl = scope + "games/social-messenger.html" + (roomId ? "?room=" + roomId : "");
 
   e.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clients) {
-      // 이미 앱 창이 열려있으면 포커스 + 방 이동 메시지
+
+      // 1) 이미 열린 PWA/브라우저 창 중 같은 origin 창 찾기
       for (var i = 0; i < clients.length; i++) {
         var c = clients[i];
-        // social-messenger.html 포함된 창 찾기
-        if (c.url && c.url.indexOf("social-messenger") > -1 && "focus" in c) {
-          c.focus();
-          if (roomId) c.postMessage({ type: "FCM_OPEN_ROOM", roomId: roomId });
-          return;
+        if (!c.url) continue;
+        // social-messenger 또는 같은 origin의 어떤 창이든
+        if (c.url.indexOf(scope) === 0 && "focus" in c) {
+          return c.focus().then(function (wc) {
+            // 방 이동 메시지 전달
+            if (roomId) wc.postMessage({ type: "FCM_OPEN_ROOM", roomId: roomId });
+            // URL이 다른 페이지면 navigate
+            if (wc.url.indexOf("social-messenger") === -1) {
+              return wc.navigate(appUrl);
+            }
+          }).catch(function () {
+            return self.clients.openWindow(appUrl);
+          });
         }
       }
-      // 열린 창 없으면 새로 열기
-      if (self.clients.openWindow) {
-        var openUrl = "./games/social-messenger.html" + (roomId ? "?room=" + roomId : "");
-        return self.clients.openWindow(openUrl);
-      }
+
+      // 2) 열린 창 없으면 PWA scope 내 URL로 새 창 열기
+      //    scope 내 절대경로를 쓰면 Android Chrome이 브라우저 대신 PWA로 열음
+      return self.clients.openWindow(appUrl);
     })
   );
 });
