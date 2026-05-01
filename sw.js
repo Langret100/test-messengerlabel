@@ -4,40 +4,34 @@
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
-firebase.initializeApp({
-  apiKey: "__FIREBASE_API_KEY__",
-  authDomain: "web-ghost-c447b.firebaseapp.com",
-  databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
-  projectId: "web-ghost-c447b",
-  storageBucket: "web-ghost-c447b.firebasestorage.app",
-  messagingSenderId: "198377381878",
-  appId: "1:198377381878:web:83b56b1b4d63138d27b1d7"
-});
-
-var messaging = firebase.messaging();
-
-// 백그라운드 푸시 수신 (앱이 꺼져 있을 때)
-messaging.onBackgroundMessage(function(payload) {
-  var title  = (payload.notification && payload.notification.title)  || '마이파이';
-  var body   = (payload.notification && payload.notification.body)   || '새 메시지가 있어요.';
-  var roomId = (payload.data && payload.data.room_id) || '';
-  var icon   = './images/icons/icon-192x192.png';
-  var badge  = './images/icons/icon-192x192.png';
-
-  self.registration.showNotification(title, {
-    body:     body,
-    icon:     icon,
-    badge:    badge,
-    tag:      'mypai-msg-' + (roomId || 'global'),
-    renotify: true,
-    vibrate:  [200, 100, 200],
-    data:     { roomId: roomId, url: './' }
+// Firebase Messaging 초기화 (백그라운드 수신용)
+// __FIREBASE_API_KEY__ 는 GitHub Actions 배포 시 실제 키로 치환됩니다.
+var _fbMessaging = null;
+try {
+  firebase.initializeApp({
+    apiKey: "__FIREBASE_API_KEY__",
+    authDomain: "web-ghost-c447b.firebaseapp.com",
+    databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
+    projectId: "web-ghost-c447b",
+    storageBucket: "web-ghost-c447b.firebasestorage.app",
+    messagingSenderId: "198377381878",
+    appId: "1:198377381878:web:83b56b1b4d63138d27b1d7"
   });
-});
+  _fbMessaging = firebase.messaging();
+} catch (e) {
+  console.warn('[SW] Firebase 초기화 실패 (배포 환경에서는 자동 치환됨):', e.message || e);
+}
+
+// 백그라운드 FCM 수신 (onBackgroundMessage는 push 이벤트와 중복 처리 방지를 위해 비활성)
+// → push 이벤트 핸들러가 모든 케이스를 처리함 (아래 참고)
+// _fbMessaging && _fbMessaging.onBackgroundMessage(function(payload) { ... });
 
 /* ============================================================
    [sw.js] Service Worker - 마이파이 PWA
    ============================================================ */
+
+/* ── SW 내부 배지 카운트 (메모리, 재시작 시 초기화) ── */
+var _badgeCount = 0;
 
 var CACHE_NAME = "mypai-v4";
 var CACHE_URLS = [
@@ -110,23 +104,25 @@ self.addEventListener("push", function (e) {
   var data;
   try { data = e.data.json(); } catch (err) { data = { title: "마이파이", body: e.data.text() }; }
 
-  var title   = data.title || "마이파이";
-  var body    = data.body  || "새 메시지가 있어요.";
-  var roomId  = data.room_id || "";
-  var count   = Number(data.unread || 1);
-  var icon    = "./images/icons/icon-192x192.png";
-  var badge   = "./images/icons/icon-192x192.png";
-  var tag     = "mypai-msg-" + (roomId || "global");
+  var title  = data.title    || data.notification_title || "마이파이";
+  var body   = data.body     || data.notification_body  || "새 메시지가 있어요.";
+  var roomId = data.room_id  || (data.data && data.data.room_id) || "";
+  var icon   = "./images/icons/icon-192x192.png";
+  var badge  = "./images/icons/icon-192x192.png";
+  var tag    = "mypai-msg-" + (roomId || "global");
+
+  // 배지 카운트 누적 (SW 내부 관리)
+  _badgeCount += 1;
 
   var opts = {
-    body:    body,
-    icon:    icon,
-    badge:   badge,
-    tag:     tag,
+    body:     body,
+    icon:     icon,
+    badge:    badge,
+    tag:      tag,
     renotify: true,
-    silent:  false,
-    vibrate: [200, 100, 200],
-    data:    { roomId: roomId, url: "./" }
+    silent:   false,
+    vibrate:  [200, 100, 200],
+    data:     { roomId: roomId, url: "./games/social-messenger.html" }
   };
 
   e.waitUntil(
@@ -137,21 +133,19 @@ self.addEventListener("push", function (e) {
 
       var tasks = [];
 
-      // 앱이 백그라운드/종료 상태일 때만 시스템 알림 표시
+      // 백그라운드/종료 상태일 때만 시스템 알림 표시
       if (!isForeground) {
         tasks.push(self.registration.showNotification(title, opts));
       }
 
-      // 앱 아이콘 배지 업데이트 (항상)
+      // 앱 배지 누적값으로 업데이트
       if (self.navigator && self.navigator.setAppBadge) {
-        tasks.push(
-          self.navigator.setAppBadge(count).catch(function(){})
-        );
+        tasks.push(self.navigator.setAppBadge(_badgeCount).catch(function(){}));
       }
 
-      // 열린 클라이언트에 배지 카운트 전달 (포그라운드 배지 갱신용)
+      // 포그라운드 클라이언트에 알림 전달 (소리/진동/배지 갱신)
       clients.forEach(function (client) {
-        client.postMessage({ type: "FCM_PUSH_RECEIVED", roomId: roomId, count: count });
+        client.postMessage({ type: "FCM_PUSH_RECEIVED", roomId: roomId, count: _badgeCount });
       });
 
       return Promise.all(tasks);
@@ -170,15 +164,17 @@ self.addEventListener("notificationclick", function (e) {
       // 이미 앱 창이 열려있으면 포커스 + 방 이동 메시지
       for (var i = 0; i < clients.length; i++) {
         var c = clients[i];
-        if (c.url.indexOf(targetUrl.replace("./", "")) > -1 && "focus" in c) {
+        // social-messenger.html 포함된 창 찾기
+        if (c.url && c.url.indexOf("social-messenger") > -1 && "focus" in c) {
           c.focus();
           if (roomId) c.postMessage({ type: "FCM_OPEN_ROOM", roomId: roomId });
           return;
         }
       }
-      // 앱이 닫혀있으면 새로 열기
+      // 열린 창 없으면 새로 열기
       if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl + (roomId ? "#room=" + roomId : ""));
+        var openUrl = "./games/social-messenger.html" + (roomId ? "?room=" + roomId : "");
+        return self.clients.openWindow(openUrl);
       }
     })
   );
@@ -189,6 +185,7 @@ self.addEventListener("message", function (e) {
   if (!e.data) return;
   var count = Number(e.data.count) || 0;
   if (e.data.type === "SET_BADGE") {
+    _badgeCount = count;
     try {
       if (self.navigator && self.navigator.setAppBadge) {
         count > 0 ? self.navigator.setAppBadge(count) : self.navigator.clearAppBadge();
@@ -196,6 +193,7 @@ self.addEventListener("message", function (e) {
     } catch (err) {}
   }
   if (e.data.type === "CLEAR_BADGE") {
+    _badgeCount = 0;
     try {
       if (self.navigator && self.navigator.clearAppBadge) self.navigator.clearAppBadge();
     } catch (err) {}

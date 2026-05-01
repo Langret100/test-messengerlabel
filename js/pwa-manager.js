@@ -11,23 +11,42 @@
   if (window.PwaManager) return;
 
   var SW_PATH = "../sw.js";
-  var SW_SCOPE = "../";
   var LS_UNREAD = "ghostUnreadCounts_v1";  // { roomId: count }
   var swReg = null;
   var deferredPrompt = null; // beforeinstallprompt 이벤트
 
-  /* ── Service Worker 등록 ── */
+  /* ── Service Worker 등록 ──
+   * games/ 하위에서 ../sw.js 등록 시 scope 충돌 방지:
+   * 이미 등록된 SW가 있으면 재사용, 없으면 scope 없이 등록
+   */
   function registerSW() {
     if (!("serviceWorker" in navigator)) return Promise.resolve(null);
-    return navigator.serviceWorker.register(SW_PATH, { scope: SW_SCOPE })
-      .then(function (reg) {
-        swReg = reg;
-        return reg;
-      })
-      .catch(function (e) {
-        console.warn("[PWA] SW 등록 실패:", e.message || e);
-        return null;
-      });
+    return navigator.serviceWorker.getRegistrations().then(function (regs) {
+      for (var i = 0; i < regs.length; i++) {
+        var r = regs[i];
+        var sw = r.active || r.installing || r.waiting;
+        if (sw && sw.scriptURL && sw.scriptURL.indexOf("sw.js") > -1) {
+          swReg = r;
+          console.log("[PWA] 기존 SW 재사용:", sw.scriptURL);
+          return r;
+        }
+      }
+      // 기존 SW 없으면 등록 시도 (이미 다른 scope로 등록된 경우 실패 가능)
+      return navigator.serviceWorker.register(SW_PATH)
+        .then(function (reg) {
+          swReg = reg;
+          console.log("[PWA] SW 신규 등록:", reg.scope);
+          return reg;
+        })
+        .catch(function (e) {
+          console.warn("[PWA] SW 등록 실패:", e.message || e);
+          // 등록 실패해도 이미 controller가 있으면 배지/메시지 전송에 사용 가능
+          return null;
+        });
+    }).catch(function (e) {
+      console.warn("[PWA] SW 조회 실패:", e.message || e);
+      return null;
+    });
   }
 
   /* ── 홈화면 추가 가능 여부 ── */
@@ -221,15 +240,19 @@
   /* 앱 배지 실제 적용 */
   function _applyBadge() {
     var total = getTotalUnread();
-    // 1) SW를 통한 앱 배지 (PWA 설치 상태일 때 앱 아이콘에 표시)
-    _postToSW({ type: "SET_BADGE", count: total });
-    // 2) 직접 API (일부 브라우저 - SW 없이도 동작)
+    // 1) 직접 API - 가장 우선 (SW 없어도 동작, Chrome 81+/Android Chrome 지원)
     try {
       if (navigator.setAppBadge) {
-        total > 0 ? navigator.setAppBadge(total) : navigator.clearAppBadge();
+        if (total > 0) {
+          navigator.setAppBadge(total).catch(function(){});
+        } else {
+          navigator.clearAppBadge().catch(function(){});
+        }
       }
     } catch (e) {}
-    // 3) 탭 타이틀에도 표시
+    // 2) SW를 통한 배지 (fallback - 일부 브라우저는 SW 경유 필요)
+    _postToSW({ type: "SET_BADGE", count: total });
+    // 3) 탭 타이틀에도 표시 (모든 환경)
     try {
       var base = "마이메신저";
       document.title = total > 0 ? ("(" + total + ") " + base) : base;
@@ -273,16 +296,35 @@
     // Service Worker 등록
     registerSW().then(function () {
       restoreAllBadgeUI();
-      // SW 등록 완료 후 controller가 세팅될 때까지 약간 대기 후 배지 재동기화
+      // SW 등록 완료 후 배지 재동기화
       setTimeout(function () {
         _applyBadge();
         // FCM 토큰 초기화 (login.js가 없는 환경 대응)
-        try {
-          if (window.FcmPush && typeof window.FcmPush.init === "function") {
-            window.FcmPush.init();
-          }
-        } catch (e) {}
-      }, 1500);
+        // ghostUser가 아직 안 세팅됐을 수 있으므로 3회 재시도
+        var _fcmTries = 0;
+        function _tryFcmInit() {
+          _fcmTries++;
+          try {
+            var userId = "";
+            try {
+              if (window.currentUser && window.currentUser.user_id) {
+                userId = String(window.currentUser.user_id);
+              } else {
+                var raw = localStorage.getItem("ghostUser");
+                if (raw) { var u = JSON.parse(raw); if (u && u.user_id) userId = String(u.user_id); }
+              }
+            } catch (e) {}
+
+            if (userId && window.FcmPush && typeof window.FcmPush.init === "function") {
+              window.FcmPush.init(userId);
+              return; // 성공 시 재시도 중단
+            }
+          } catch (e) {}
+          // userId 없으면 최대 3회, 2초 간격 재시도
+          if (_fcmTries < 3) setTimeout(_tryFcmInit, 2000);
+        }
+        setTimeout(_tryFcmInit, 500);
+      }, 1000);
     });
 
     // beforeinstallprompt 캐치 (Android Chrome 등)
@@ -323,7 +365,21 @@
           var d = ev && ev.data;
           if (!d) return;
           if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
-            incrementUnread(d.roomId);
+            // SW가 이미 setAppBadge를 처리했으므로
+            // localStorage만 갱신하고 SW에 중복 SET_BADGE 보내지 않음
+            var counts = getUnreadCounts();
+            counts[d.roomId] = (counts[d.roomId] || 0) + 1;
+            saveUnreadCounts(counts);
+            _updateRoomBadgeUI(d.roomId, counts[d.roomId]);
+            // 타이틀만 갱신
+            try {
+              var total = getTotalUnread();
+              document.title = total > 0 ? ("(" + total + ") 마이메신저") : "마이메신저";
+            } catch (et) {}
+          }
+          if (d.type === "FCM_OPEN_ROOM" && d.roomId) {
+            // 알림 클릭 → 방 이동 (social-messenger.js의 핸들러와 중복이지만 안전)
+            window.dispatchEvent(new CustomEvent("ghost:open-room", { detail: { roomId: d.roomId } }));
           }
         } catch (e) {}
       });

@@ -280,8 +280,25 @@ var NotifySound = (function () {
     target.addEventListener("mousedown", once, { passive: true });
     target.addEventListener("click", once, { passive: true });
 
+    // 앱 포그라운드 복귀 시 AudioContext resume 시도
     document.addEventListener("visibilitychange", function () {
-      if (!enabled) return;
+      tryResume();
+      // 앱이 다시 보이면 enabled 강제 활성화 시도 (PWA 앱 복귀 대응)
+      if (!document.hidden && !enabled) {
+        var c = ensureContext();
+        if (c) {
+          c.resume().then(function () {
+            if (c.state === "running") {
+              enabled = true;
+              startKeepAlive();
+            }
+          }).catch(function(){});
+        }
+      }
+    });
+
+    // 페이지 포커스 시에도 resume 시도 (일부 Android 브라우저 대응)
+    window.addEventListener("focus", function () {
       tryResume();
     });
   }
@@ -300,12 +317,11 @@ var NotifySound = (function () {
   function playDdiring() {
     var soundPlayed = false;
 
+    // ── 소리 재생 (AudioContext가 running 상태일 때만)
     if (enabled) {
       var c = ensureContext();
       if (c && masterGain) {
         tryResume();
-
-        // 실제로 소리가 나오는지 확인 (AudioContext state)
         if (c.state === "running") {
           var now = c.currentTime;
           var scheduleTone = function (freq, t, dur) {
@@ -313,17 +329,14 @@ var NotifySound = (function () {
             var g = c.createGain();
             osc.type = "sine";
             osc.frequency.setValueAtTime(freq, t);
-
             g.gain.setValueAtTime(0.0001, t);
             g.gain.exponentialRampToValueAtTime(0.8, t + 0.01);
             g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-
             osc.connect(g);
             g.connect(masterGain);
             osc.start(t);
             osc.stop(t + dur + 0.02);
           };
-
           scheduleTone(880,  now + 0.00, 0.18);
           scheduleTone(1320, now + 0.20, 0.22);
           soundPlayed = true;
@@ -331,8 +344,7 @@ var NotifySound = (function () {
       }
     }
 
-    // 소리가 재생됐어도 진동은 항상 시도 (무음모드 대응)
-    // soundPlayed가 false면 소리 없이 진동만
+    // ── 진동은 enabled/소리 재생 여부와 무관하게 항상 시도
     tryVibrate();
 
     return soundPlayed;
@@ -707,17 +719,18 @@ window.NotifySetting = NotifySetting; // profile-manager 등 외부에서 접근
             }
           } catch (eSound) {}
 
-          // 배지: 내가 현재 보고 있는 방이 아닐 때
+          // 배지: 내가 현재 보고 있는 방이 아닐 때 + 내 메시지 제외
           var msgRoomId = String(msg2.room_id || roomId || "");
           var isMyCurrentRoom = (msgRoomId === String(currentRoomId || ""));
-          if (!isMyCurrentRoom) {
+          var isMyMsg = (msg2.user_id && myId && String(msg2.user_id) === String(myId));
+          if (!isMyCurrentRoom && !isMyMsg) {
             // 방 목록 빨간 점
             try {
               if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.mark === "function") {
                 window.RoomUnreadBadge.mark(msgRoomId, msg2.ts);
               }
             } catch (eBadge) {}
-            // 앱 아이콘 숫자 배지 (항상 - 앱 열려있어도 다른 방이면 표시)
+            // 앱 아이콘 숫자 배지
             try {
               if (window.PwaManager) window.PwaManager.incrementUnread(msgRoomId);
             } catch (ePwaBadge) {}
@@ -2070,6 +2083,16 @@ onPickImage: async function () {
 
     loadUserFromStorage();
 
+    // 알림 클릭으로 앱 열린 경우 URL 파라미터 ?room= 에서 방 이동
+    try {
+      var urlRoom = new URLSearchParams(location.search).get("room");
+      if (urlRoom) {
+        setTimeout(function () {
+          if (typeof switchRoom === "function") switchRoom(urlRoom, null);
+        }, 1500);
+      }
+    } catch (eUrl) {}
+
     // (알림음 정책) 첫 터치/클릭 이후에만 소리 재생 가능 → 미리 바인딩
     NotifySound.bindUserGesture(document);
     // signals 알림(방별 reply 감지) 초기화
@@ -2091,6 +2114,8 @@ onPickImage: async function () {
                 onNotify: function (info) {
                   // 현재 열려있는 방이면 알림 생략
                   if (info && info.roomId && currentRoomId && info.roomId === currentRoomId) return;
+                  // 내가 보낸 메시지면 알림 생략
+                  if (info && info.user_id && myId && String(info.user_id) === String(myId)) return;
 
 
 // 방문(입장)하지 않은 방은 알림/소리/점 표시를 하지 않음
@@ -2115,14 +2140,18 @@ try {
                   if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
                     NotifySound.playDdiring(); // 소리 + 진동
                     if (NotifySetting.maybeShow) {
+                      var _sig = (info.signal) || {};
                       NotifySetting.maybeShow({
                         room_id: info.roomId,
-                        user_id: info.user_id,
-                        ts: info.ts,
-                        nickname: "알림",
-                        text: "새 메시지"
+                        user_id: info.user_id || _sig.user_id || "",
+                        ts:      info.ts,
+                        nickname: _sig.nickname || "알림",
+                        text:    _sig.text || "새 메시지"
                       });
                     }
+                  } else {
+                    // 알림 꺼져도 진동은 항상
+                    if (NotifySound.tryVibrate) NotifySound.tryVibrate();
                   }
                 }
               });
@@ -2196,9 +2225,16 @@ attachEvents();
    */
   function __sendFcmPushNotify(roomId, senderNick, text) {
     try {
-      if (typeof window.postToSheet !== "function") return;
+      if (typeof window.postToSheet !== "function") {
+        console.warn("[FCM] postToSheet 없음 - 푸시 발송 불가");
+        return;
+      }
       var db = ensureFirebase();
-      if (!db) return;
+      if (!db) {
+        console.warn("[FCM] Firebase DB 없음 - 푸시 발송 불가");
+        return;
+      }
+      console.log("[FCM] 푸시 발송 시작:", roomId, senderNick, text);
 
       // 현재 내 활성 방 정보를 DB에 기록 (수신 측 제외 판단용)
       // /fcm_active_room/{userId} = { room_id, ts }
@@ -2252,7 +2288,11 @@ attachEvents();
           tokens.push(v.token);
         });
 
-        if (tokens.length === 0) return;
+        console.log("[FCM] 발송 대상 토큰 수:", tokens.length, "/ 전체 토큰 수:", (function(){var n=0; tokenSnap.forEach(function(){n++;}); return n;})());
+        if (tokens.length === 0) {
+          console.warn("[FCM] 발송할 토큰 없음 (모두 제외됨 또는 미등록)");
+          return;
+        }
 
         // Apps Script에 FCM 푸시 발송 요청
         window.postToSheet({
@@ -2262,11 +2302,14 @@ attachEvents();
           body:    text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : "새 메시지",
           tokens:  tokens.join(",")
         }).then(function(res) {
-          if (res && typeof res.json === "function") {
-            res.json().then(function(d) {
-              console.log("[FCM] 발송 결과:", JSON.stringify(d));
-            }).catch(function(){});
-          }
+          if (!res) { console.warn("[FCM] 응답 없음"); return; }
+          // Response 객체 (fetch) 또는 일반 객체 모두 처리
+          var p = (typeof res.json === "function") ? res.json() : Promise.resolve(res);
+          p.then(function(d) {
+            console.log("[FCM] Apps Script 응답:", JSON.stringify(d));
+          }).catch(function(e2) {
+            console.warn("[FCM] 응답 파싱 실패:", e2);
+          });
         }).catch(function (e) {
           console.warn("[FCM] 발송 요청 실패:", e);
         });
@@ -2305,12 +2348,7 @@ attachEvents();
     try {
       var d = ev && ev.data;
       if (!d) return;
-      // 푸시 수신 → pwa-manager 배지 증가
-      if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
-        if (window.PwaManager && typeof window.PwaManager.incrementUnread === "function") {
-          window.PwaManager.incrementUnread(d.roomId);
-        }
-      }
+      // FCM_PUSH_RECEIVED 배지 처리는 pwa-manager.js에서 전담 (중복 방지)
       // 알림 클릭 → 해당 방으로 이동
       if (d.type === "FCM_OPEN_ROOM" && d.roomId) {
         if (typeof switchRoom === "function") {

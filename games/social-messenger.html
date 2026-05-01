@@ -876,11 +876,13 @@
   <a id="imageZoomOpenLink" class="zoom-open-link" href="#" target="_blank" rel="noopener">원본 열기</a>
 </div>
 
+  <!-- Firebase SDK (messaging 포함, config.js 앞에 먼저 로드) -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
   <script src="../js/config.js"></script>
-<script src="../js/ui.js"></script>
+  <script src="../js/ui.js"></script>
   <script src="../js/fullscreen-toggle.js"></script>
   <script src="../js/messenger-press-guard.js"></script>
   <script src="../js/send-voice-hold.js"></script>
@@ -898,11 +900,10 @@
   <script src="../js/signals.js"></script>
   <script src="../js/room-message-stream.js"></script>
   <script src="../js/firebase-rooms.js"></script>
+  <!-- FCM 푸시 토큰 관리 (pwa-manager 앞에 먼저 로드) -->
+  <script src="../js/fcm-push.js"></script>
   <script src="../js/pwa-manager.js"></script>
   <script src="../js/profile-manager.js"></script>
-  <!-- FCM 푸시 알림 모듈 -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
-  <script src="../js/fcm-push.js"></script>
   <script src="../js/social-messenger.js"></script>
 </body>
 </html>

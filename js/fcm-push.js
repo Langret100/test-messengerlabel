@@ -28,6 +28,7 @@
 
   var _token = null;
   var _userId = null;
+  var _initialized = false; // 중복 init 방지
 
   /* ── Firebase DB 접근 ── */
   function getDb() {
@@ -44,7 +45,24 @@
     try {
       if (window.currentUser && window.currentUser.user_id) return String(window.currentUser.user_id);
       var raw = localStorage.getItem('ghostUser');
-      if (raw) { var u = JSON.parse(raw); if (u && u.user_id) return String(u.user_id); }
+      if (raw) {
+        var u = JSON.parse(raw);
+        if (u && u.user_id) return String(u.user_id);
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  /* ── 현재 닉네임 ── */
+  function getMyNickname() {
+    try {
+      if (window.currentUser && window.currentUser.nickname) return String(window.currentUser.nickname);
+      var raw = localStorage.getItem('ghostUser');
+      if (raw) {
+        var u = JSON.parse(raw);
+        if (u && u.nickname) return String(u.nickname);
+        if (u && u.username) return String(u.username);
+      }
     } catch (e) {}
     return '';
   }
@@ -92,41 +110,73 @@
     });
   }
 
-  /* ── DB에 토큰 저장: /fcm_tokens/{userId}/token + rooms[] ── */
+  /* ── DB에 토큰 저장: /fcm_tokens/{userId} ── */
   function saveTokenToDb(token, userId) {
     var db = getDb();
-    if (!db || !token || !userId) return;
-    var rooms = getVisitedRoomIds();
-    var safe = userId.replace(/[.#$\[\]]/g, '_');
-    db.ref(DB_TOKENS + '/' + safe).set({
+    if (!db || !token || !userId) {
+      console.warn('[FCM] saveTokenToDb 스킵 - db:', !!db, 'token:', !!token, 'userId:', userId);
+      return;
+    }
+    var rooms    = getVisitedRoomIds();
+    var nickname = getMyNickname();
+    var safe     = userId.replace(/[.#$\[\]]/g, '_');
+    var payload  = {
       token:    token,
-      user_id:  userId,
-      rooms:    rooms.join(','),  // 쉼표 구분 문자열
+      user_id:  userId,           // 필수 (알림 발신자 제외 판단)
+      nickname: nickname || userId,
+      rooms:    rooms.join(','),   // 쉼표 구분 (내가 방문한 방 목록)
       ts:       Date.now()
-    }).catch(function (e) {
-      console.warn('[FCM] 토큰 저장 실패:', e.message || e);
-    });
+    };
+    console.log('[FCM] 토큰 저장 시도 → fcm_tokens/' + safe, payload);
+    db.ref(DB_TOKENS + '/' + safe).set(payload)
+      .then(function () { console.log('[FCM] 토큰 저장 완료'); })
+      .catch(function (e) { console.warn('[FCM] 토큰 저장 실패:', e.message || e, e.code); });
   }
 
   /* ── 알림 권한 요청 + 토큰 발급 + DB 저장 ── */
   function init(userId) {
-    _userId = userId || getMyUserId();
-    if (!_userId) return;
+    var newUserId = userId || getMyUserId();
+    if (!newUserId) return;
 
-    // 이미 토큰 있으면 DB만 갱신
+    // userId가 바뀌면 초기화 리셋 (재로그인 대응)
+    if (_userId && newUserId !== _userId) {
+      _initialized = false;
+      _token = null;
+    }
+    _userId = newUserId;
+
+    // 이미 토큰 발급 완료 상태면 DB 갱신만
+    if (_initialized && _token) {
+      saveTokenToDb(_token, _userId);
+      return;
+    }
+
+    // 이미 캐시된 토큰 있으면 DB 갱신 후 종료
     var cached = localStorage.getItem(LS_FCM_TOKEN);
     if (cached) {
       _token = cached;
       saveTokenToDb(cached, _userId);
+      _initialized = true;
+      return; // 캐시 토큰으로 충분, requestToken 재호출 불필요
     }
 
     // 알림 권한 확인
-    if (!('Notification' in window)) return;
-    if (Notification.permission === 'denied') return;
+    if (!('Notification' in window)) {
+      console.warn('[FCM] Notification API 미지원');
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      console.warn('[FCM] 알림 권한 차단됨');
+      return;
+    }
+    console.log('[FCM] 알림 권한 상태:', Notification.permission, '| userId:', _userId);
 
     if (Notification.permission === 'granted') {
       requestToken()
-        .then(function (token) { saveTokenToDb(token, _userId); })
+        .then(function (token) {
+          _initialized = true;
+          saveTokenToDb(token, _userId);
+        })
         .catch(function (e) { console.warn('[FCM] 토큰 발급 실패:', e.message || e); });
     } else {
       // 권한 미결정 → 첫 사용자 인터랙션(터치/클릭) 시 자동 요청
@@ -136,7 +186,10 @@
         Notification.requestPermission().then(function (perm) {
           if (perm === 'granted') {
             requestToken()
-              .then(function (token) { saveTokenToDb(token, _userId); })
+              .then(function (token) {
+                _initialized = true;
+                saveTokenToDb(token, _userId);
+              })
               .catch(function (e) { console.warn('[FCM] 토큰 발급 실패:', e.message || e); });
           }
         });
