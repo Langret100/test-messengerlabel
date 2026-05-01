@@ -31,8 +31,8 @@
           return r;
         }
       }
-      // 기존 SW 없으면 등록 시도 (이미 다른 scope로 등록된 경우 실패 가능)
-      return navigator.serviceWorker.register(SW_PATH)
+      // 기존 SW 없으면 등록 시도
+      return navigator.serviceWorker.register(SW_PATH, { scope: "/test-messengerlabel/" })
         .then(function (reg) {
           swReg = reg;
           console.log("[PWA] SW 신규 등록:", reg.scope);
@@ -40,7 +40,6 @@
         })
         .catch(function (e) {
           console.warn("[PWA] SW 등록 실패:", e.message || e);
-          // 등록 실패해도 이미 controller가 있으면 배지/메시지 전송에 사용 가능
           return null;
         });
     }).catch(function (e) {
