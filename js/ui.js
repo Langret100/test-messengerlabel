@@ -35,7 +35,6 @@
         headers: {
           "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
         },
-        redirect: "follow",
         body: body
       });
     } catch (e) {
