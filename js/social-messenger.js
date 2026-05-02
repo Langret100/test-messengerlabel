@@ -341,12 +341,7 @@ var NotifySetting = (function () {
   function isEnabled() {
     try {
       var v = localStorage.getItem(KEY);
-      if (v === null) {
-        // 최초 방문 시 기본 ON으로 초기화
-        try { localStorage.setItem(KEY, "1"); } catch (e2) {}
-        return true;
-      }
-      return v !== "0";
+      return v !== "0"; // 기본 ON
     } catch (e) {
       return true;
     }
@@ -2269,37 +2264,24 @@ attachEvents();
         }
 
         // Apps Script에 FCM 푸시 발송 요청
-        console.log("[FCM] postToSheet 호출:", tokens.length + "개 토큰");
-        var _fcmReq = window.postToSheet({
+        window.postToSheet({
           mode:    "fcm_push",
           room_id: roomId || "global",
           sender:  senderNick || "누군가",
           body:    text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : "새 메시지",
           tokens:  tokens.join(",")
-        });
-        if (!_fcmReq || typeof _fcmReq.then !== "function") {
-          console.warn("[FCM] postToSheet가 Promise를 반환하지 않음:", _fcmReq);
-        } else {
-          _fcmReq.then(function(res) {
-            console.log("[FCM] 응답 수신 status:", res && res.status, "ok:", res && res.ok);
-            if (!res) { console.warn("[FCM] 응답 없음"); return; }
-            var p = (typeof res.json === "function") ? res.json() : Promise.resolve(res);
-            p.then(function(d) {
-              console.log("[FCM] Apps Script 응답:", JSON.stringify(d));
-            }).catch(function(e2) {
-              // JSON 파싱 실패 = Apps Script가 JSON이 아닌 다른 형식으로 응답
-              if (typeof res.text === "function") {
-                res.text().then(function(t) {
-                  console.warn("[FCM] Apps Script 응답(텍스트):", t);
-                });
-              } else {
-                console.warn("[FCM] 응답 파싱 실패:", e2);
-              }
-            });
-          }).catch(function (e) {
-            console.warn("[FCM] 발송 요청 실패:", e.message || e);
+        }).then(function(res) {
+          if (!res) { console.warn("[FCM] 응답 없음"); return; }
+          // Response 객체 (fetch) 또는 일반 객체 모두 처리
+          var p = (typeof res.json === "function") ? res.json() : Promise.resolve(res);
+          p.then(function(d) {
+            console.log("[FCM] Apps Script 응답:", JSON.stringify(d));
+          }).catch(function(e2) {
+            console.warn("[FCM] 응답 파싱 실패:", e2);
           });
-        }
+        }).catch(function (e) {
+          console.warn("[FCM] 발송 요청 실패:", e);
+        });
       }).catch(function () {});
     } catch (e) {}
   }
