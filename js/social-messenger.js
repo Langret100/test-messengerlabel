@@ -2185,17 +2185,43 @@ attachEvents();
 
 
 
-  /* ── FCM 푸시 알림 요청 (Apps Script 경유) ── */
+  /* ══════════════════════════════════════════════════════════
+     FCM 푸시 알림 요청 (Apps Script 경유)
+     ══════════════════════════════════════════════════════════
+     흐름 요약:
+       sendTextMessage() / sendImageMessage() / sendFileMessage()
+         └→ __sendFcmPushNotify(roomId, senderNick, text) 호출
+               └→ Firebase DB /fcm_tokens  에서 발송 대상 토큰 수집
+               └→ Firebase DB /fcm_active_room  에서 현재 방 활성 유저 파악
+               └→ postToSheet({ mode: "fcm_push", tokens, ... }) 호출
+                     └→ Apps Script FCM_PUSH.gs handleFcmPush_()
+                           └→ FCM v1 HTTP API → 각 기기에 push 발송
+                           └→ 404/410 응답 → DB에서 만료 토큰 삭제
+               └→ Apps Script 응답에 status 404/410 이 있으면:
+                     window.dispatchEvent(new CustomEvent("ghost:fcm-token-stale"))
+                     └→ fcm-push.js 가 이벤트 수신 → refreshToken() 호출
+                           └→ 캐시 삭제 → 새 토큰 발급 → DB 재저장
+
+     [제거 시] 아래 함수 호출부 3곳과 함수 본체를 삭제:
+       sendTextMessage  : try { __sendFcmPushNotify(...) } catch (eFcm) {}
+       sendImageMessage : try { __sendFcmPushNotify(...) } catch (eFcm) {}
+       sendFileMessage  : (파일은 알림 미발송 - 필요 시 추가)
+  ══════════════════════════════════════════════════════════ */
+
   /**
-   * __sendFcmPushNotify — FCM 푸시 알림 요청
+   * __sendFcmPushNotify — FCM 푸시 알림 발송 요청
    *
-   * 제외 조건 (알림 안 보내는 경우):
-   *   1) 보내는 사람 본인 → 자기 자신에게는 안 보냄
-   *   2) 해당 방을 구독하지 않은 유저 → ghostRoomVisited_v1 기준
-   *   3) 수신자가 현재 이 방을 열고 있는 경우
-   *      → DB /fcm_active_room/{userId} 에 현재 방 ID를 저장해두고 비교
+   * @param {string} roomId     - 현재 채팅방 ID
+   * @param {string} senderNick - 발신자 닉네임 (알림 타이틀에 표시)
+   * @param {string} text       - 알림 본문 (50자 초과 시 자름)
    *
-   * [제거 시] social-messenger.js 에서 이 함수 호출부 3곳과 함수 본체 삭제
+   * 알림을 보내지 않는 제외 조건:
+   *   1) 발신자 본인 토큰 → 자기가 보낸 메시지로 자기한테 알림 안 옴
+   *   2) 해당 방을 한 번도 방문하지 않은 유저 → ghostRoomVisited_v1 기준
+   *      (방 목록에 없는 방의 알림은 무관한 사람에게 안 보냄)
+   *   3) 현재 이 방을 열고 있는 유저 → /fcm_active_room/{userId} 의
+   *      room_id와 현재 방이 같고 30초 이내 활성이면 제외
+   *      (이미 보고 있는 사람에게 알림 중복 발송 방지)
    */
   function __sendFcmPushNotify(roomId, senderNick, text) {
     try {
@@ -2210,56 +2236,70 @@ attachEvents();
       }
       console.log("[FCM] 푸시 발송 시작:", roomId, senderNick, text);
 
-      // 현재 내 활성 방 정보를 DB에 기록 (수신 측 제외 판단용)
-      // /fcm_active_room/{userId} = { room_id, ts }
+      /* ── 내 활성 방 정보 DB에 기록 ─────────────────────────
+         DB 경로: /fcm_active_room/{safe_userId} = { room_id, ts }
+         수신 측 필터링 시 이 정보로 "현재 방을 보고 있는 유저" 판단.
+         safe_userId: Firebase 키 규칙상 . # $ [ ] → _ 치환 필요.
+      ─────────────────────────────────────────────────────── */
       if (myId) {
         var safeId = String(myId).replace(/[.#$\[\]]/g, "_");
         db.ref("fcm_active_room/" + safeId).set({
           room_id: roomId || "",
-          ts: Date.now()
+          ts:      Date.now()
         }).catch(function(){});
       }
 
-      // Firebase DB에서 해당 방 구독 토큰 목록 조회 후 Apps Script로 전달
+      /* ── 토큰 목록 + 활성 방 정보 병렬 조회 ────────────────
+         Promise.all로 두 DB 경로를 동시에 읽어 레이턴시 최소화.
+           fcm_tokens      : 전체 유저 FCM 토큰 목록
+           fcm_active_room : 현재 방 활성 유저 목록 (제외 판단용)
+      ─────────────────────────────────────────────────────── */
       Promise.all([
         db.ref("fcm_tokens").once("value"),
         db.ref("fcm_active_room").once("value")
       ]).then(function (results) {
-        var tokenSnap  = results[0];
-        var activeSnap = results[1];
-        if (!tokenSnap.exists()) return;
+        var tokenSnap  = results[0]; // /fcm_tokens 스냅샷
+        var activeSnap = results[1]; // /fcm_active_room 스냅샷
+        if (!tokenSnap.exists()) return; // 등록된 토큰 없으면 종료
 
-        // 현재 해당 방을 보고 있는 유저 ID 목록
+        /* ── 현재 이 방을 열고 있는 유저 ID Set 구성 ──────────
+           activeInRoom[safe_userId] = true 이면 해당 유저는 발송 제외.
+           조건: 30초 이내 활성 기록 AND 현재 roomId와 동일한 방
+        ─────────────────────────────────────────────────────── */
         var activeInRoom = {};
         activeSnap.forEach(function (child) {
-          var v = child.val() || {};
+          var v   = child.val() || {};
           var age = Date.now() - (v.ts || 0);
-          // 30초 이내에 활성 기록이 있고, 같은 방이면 제외
+          // 30초(30000ms) 이내 활성이고, 현재 발송 방과 동일한 방
           if (age < 30000 && String(v.room_id) === String(roomId)) {
             activeInRoom[child.key] = true;
           }
         });
 
+        /* ── 발송 대상 토큰 필터링 ───────────────────────────
+           tokenSnap 전체를 순회하며 제외 조건을 하나씩 체크.
+        ─────────────────────────────────────────────────────── */
         var tokens = [];
         tokenSnap.forEach(function (child) {
           var v = child.val() || {};
-          if (!v.token) return;
+          if (!v.token) return; // 토큰 없는 항목 스킵
 
-          // 1) 내 토큰 제외 (발신자)
+          // 제외 조건 1: 발신자 본인 토큰 제외
           if (v.user_id && myId && String(v.user_id) === String(myId)) return;
 
-          // 2) 현재 해당 방 열고 있는 유저 제외
+          // 제외 조건 2: 현재 이 방을 열고 있는 유저 제외
           var safeUid = String(v.user_id || "").replace(/[.#$\[\]]/g, "_");
           if (activeInRoom[safeUid]) return;
 
-          // 3) 해당 방 구독자만 (방문한 적 있는 방)
+          // 제외 조건 3: 이 방을 구독하지 않은 유저 제외
+          // v.rooms: 내가 방문한 방 목록 (쉼표 구분, fcm-push.js saveTokenToDb에서 저장)
           var rooms = String(v.rooms || "global").split(",");
-          var isSubscribed = rooms.indexOf(String(roomId)) >= 0
-            || (roomId === "global")
-            || rooms.indexOf("global") >= 0;
+          var isSubscribed = rooms.indexOf(String(roomId)) >= 0  // 특정 방 구독
+            || (roomId === "global")                              // global 방이면 모두 발송
+            || rooms.indexOf("global") >= 0;                     // global 구독자는 모든 방 수신
           if (!isSubscribed) return;
 
-          tokens.push(v.token);
+          tokens.push(v.token); // 조건 통과 → 발송 대상에 추가
         });
 
         console.log("[FCM] 발송 대상 토큰 수:", tokens.length, "/ 전체 토큰 수:", (function(){var n=0; tokenSnap.forEach(function(){n++;}); return n;})());
@@ -2268,74 +2308,130 @@ attachEvents();
           return;
         }
 
-        // Apps Script에 FCM 푸시 발송 요청
+        /* ── Apps Script에 FCM 발송 요청 ─────────────────────
+           postToSheet: config.js 에 정의된 Apps Script 호출 함수.
+           mode=fcm_push → FCM_PUSH.gs handleFcmPush_()로 라우팅.
+           body: 50자 초과 시 잘라서 전송 (알림창 미관 고려).
+        ─────────────────────────────────────────────────────── */
         console.log("[FCM] postToSheet 호출:", tokens.length + "개 토큰");
         var _fcmReq = window.postToSheet({
           mode:    "fcm_push",
           room_id: roomId || "global",
           sender:  senderNick || "누군가",
           body:    text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : "새 메시지",
-          tokens:  tokens.join(",")
+          tokens:  tokens.join(",") // 쉼표 구분 문자열로 전달
         });
+
         if (!_fcmReq || typeof _fcmReq.then !== "function") {
           console.warn("[FCM] postToSheet가 Promise를 반환하지 않음:", _fcmReq);
-        } else {
-          _fcmReq.then(function(res) {
-            console.log("[FCM] 응답 수신 status:", res && res.status, "ok:", res && res.ok);
-            if (!res) { console.warn("[FCM] 응답 없음"); return; }
-            var p = (typeof res.json === "function") ? res.json() : Promise.resolve(res);
-            p.then(function(d) {
-              console.log("[FCM] Apps Script 응답:", JSON.stringify(d));
-            }).catch(function(e2) {
-              // JSON 파싱 실패 = Apps Script가 JSON이 아닌 다른 형식으로 응답
-              if (typeof res.text === "function") {
-                res.text().then(function(t) {
-                  console.warn("[FCM] Apps Script 응답(텍스트):", t);
-                });
-              } else {
-                console.warn("[FCM] 응답 파싱 실패:", e2);
-              }
-            });
-          }).catch(function (e) {
-            console.warn("[FCM] 발송 요청 실패:", e.message || e);
-          });
+          return;
         }
-      }).catch(function () {});
+
+        /* ── Apps Script 응답 처리 ────────────────────────────
+           Apps Script는 { ok, sent, stale_removed, results: [...] } 반환.
+           results 배열의 각 항목: { token: "...마지막6자리", status: HTTP코드 }
+
+           ★ 핵심: status 404 또는 410 이 하나라도 있으면
+             ghost:fcm-token-stale 이벤트를 dispatch.
+             → fcm-push.js 가 이벤트 수신
+             → refreshToken() 호출: 캐시 삭제 → 새 토큰 발급 → DB 재저장
+             → 다음 메시지부터 유효한 토큰으로 발송됨
+        ─────────────────────────────────────────────────────── */
+        _fcmReq.then(function(res) {
+          console.log("[FCM] 응답 수신 status:", res && res.status, "ok:", res && res.ok);
+          if (!res) { console.warn("[FCM] 응답 없음"); return; }
+
+          // Apps Script 응답이 Response 객체인 경우 .json() 호출, 이미 객체면 그대로 사용
+          var p = (typeof res.json === "function") ? res.json() : Promise.resolve(res);
+          p.then(function(d) {
+            console.log("[FCM] Apps Script 응답:", JSON.stringify(d));
+
+            /* ── [핵심 버그 수정] 만료 토큰 감지 → 토큰 갱신 이벤트 dispatch ──
+               d.results 배열에 status === 404 또는 410 인 항목이 있으면
+               내 FCM 토큰도 만료됐을 가능성이 있으므로 갱신을 요청.
+
+               이벤트 수신자: fcm-push.js
+                 window.addEventListener('ghost:fcm-token-stale', function() {
+                   if (_userId) refreshToken(_userId); // 캐시 삭제 → 재발급
+                 });
+
+               이전 코드: 이 블록이 없어서 만료 토큰이 계속 재사용됨
+               수정 후: 404/410 감지 즉시 이벤트 → 자동 갱신
+            ─────────────────────────────────────────────────────── */
+            if (d && Array.isArray(d.results)) {
+              var hasStale = d.results.some(function(r) {
+                return r.status === 404 || r.status === 410;
+              });
+              if (hasStale) {
+                console.warn("[FCM] 만료 토큰 감지(404/410) → ghost:fcm-token-stale 이벤트 발송");
+                window.dispatchEvent(new CustomEvent("ghost:fcm-token-stale"));
+              }
+            }
+          }).catch(function(e2) {
+            // JSON 파싱 실패 → Apps Script가 HTML 오류 페이지 등 비-JSON으로 응답한 경우
+            if (typeof res.text === "function") {
+              res.text().then(function(t) {
+                console.warn("[FCM] Apps Script 응답(텍스트):", t);
+              });
+            } else {
+              console.warn("[FCM] 응답 파싱 실패:", e2);
+            }
+          });
+        }).catch(function (e) {
+          // 네트워크 오류, CORS 오류, Apps Script URL 오류 등
+          console.warn("[FCM] 발송 요청 실패:", e.message || e);
+        });
+
+      }).catch(function () {
+        // Firebase DB 조회 실패 (네트워크 오류 등) → 조용히 무시
+      });
     } catch (e) {}
   }
 
-  /* ── 방 입장/퇴장 시 활성 방 정보 갱신 ── */
-  /* switchRoom 호출 시 /fcm_active_room/{userId} 갱신 — 알림 제외 판단용 */
+  /* ── 방 이동 시 /fcm_active_room 자동 갱신 패치 ──────────────
+     switchRoom()이 호출될 때마다 /fcm_active_room/{userId}.room_id 를 갱신.
+     이 정보로 __sendFcmPushNotify 에서 "현재 방을 열고 있는 유저" 를 판단해
+     이미 보고 있는 사람에게 중복 알림이 가지 않도록 제외함.
+
+     패치 방식:
+       원본 switchRoom 함수를 __origSwitchRoomForFcm 에 보관 후,
+       래퍼 함수로 교체 → DB 갱신 후 원본 함수 호출 (Decorator 패턴).
+     init() 이후 500ms 딜레이: switchRoom 함수가 완전히 정의된 뒤 패치.
+  ─────────────────────────────────────────────────────────── */
   var __origSwitchRoomForFcm = null;
   function __patchSwitchRoomForFcm() {
     if (typeof switchRoom !== "function" || __origSwitchRoomForFcm) return;
     __origSwitchRoomForFcm = switchRoom;
     switchRoom = function (roomId, roomInfo) {
-      // 방 이동 시 활성 방 갱신
+      // 방 이동 시 내 활성 방 정보 갱신 (알림 수신 제외 판단용)
       if (myId && roomId) {
         try {
           var db2 = ensureFirebase();
           if (db2) {
             var safeId2 = String(myId).replace(/[.#$\[\]]/g, "_");
             db2.ref("fcm_active_room/" + safeId2).set({
-              room_id: String(roomId),
-              ts: Date.now()
+              room_id: String(roomId), // 현재 입장한 방 ID
+              ts:      Date.now()      // 활성 시각 (30초 기준 만료 판단)
             }).catch(function(){});
           }
         } catch (e2) {}
       }
-      return __origSwitchRoomForFcm.apply(this, arguments);
+      return __origSwitchRoomForFcm.apply(this, arguments); // 원본 함수 실행
     };
   }
-  // 초기화 후 패치
-  setTimeout(__patchSwitchRoomForFcm, 500);
+  setTimeout(__patchSwitchRoomForFcm, 500); // init() 완료 후 패치
 
-  /* ── sw.js에서 FCM 수신 시 배지/방 이동 처리 ── */
+  /* ── sw.js → 앱 메시지 수신 처리 ────────────────────────────
+     FCM 알림 클릭 시 sw.js 가 clients.postMessage()로 메시지 전송.
+     여기서 수신해 해당 채팅방으로 이동시킴.
+
+     FCM_PUSH_RECEIVED (배지 증가 등) 처리는 pwa-manager.js 전담.
+     → 이 리스너에서는 방 이동(FCM_OPEN_ROOM)만 처리해 중복 방지.
+  ─────────────────────────────────────────────────────────── */
   navigator.serviceWorker && navigator.serviceWorker.addEventListener("message", function (ev) {
     try {
       var d = ev && ev.data;
       if (!d) return;
-      // FCM_PUSH_RECEIVED 배지 처리는 pwa-manager.js에서 전담 (중복 방지)
       // 알림 클릭 → 해당 방으로 이동
       if (d.type === "FCM_OPEN_ROOM" && d.roomId) {
         if (typeof switchRoom === "function") {
