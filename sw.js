@@ -33,7 +33,7 @@ try {
 /* ── SW 내부 배지 카운트 (메모리, 재시작 시 초기화) ── */
 var _badgeCount = 0;
 
-var CACHE_NAME = "mypai-v5";
+var CACHE_NAME = "mypai-v6";
 var CACHE_URLS = [
   "./games/social-messenger.html",
   "./js/config.js",
