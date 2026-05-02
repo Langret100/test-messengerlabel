@@ -123,6 +123,7 @@
     setCurrentUserFromStorage();
     openMessenger(false);
 
+
     // 비로그인 상태라면, 로그인 패널을 확실히 띄움(로드 순서/브라우저 차이 대비)
     setTimeout(function () {
       try {
