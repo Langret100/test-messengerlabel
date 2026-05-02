@@ -341,7 +341,12 @@ var NotifySetting = (function () {
   function isEnabled() {
     try {
       var v = localStorage.getItem(KEY);
-      return v !== "0"; // 기본 ON
+      if (v === null) {
+        // 최초 방문 시 기본 ON으로 초기화
+        try { localStorage.setItem(KEY, "1"); } catch (e2) {}
+        return true;
+      }
+      return v !== "0";
     } catch (e) {
       return true;
     }
