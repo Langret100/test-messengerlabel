@@ -1,1 +1,716 @@
-!function(){var t=null,o=null,e=null,r=null,n=[],a=null,i=null,c="ghostActiveRoomId",l="ghostActiveRoomName",m="ghostRoomsCache_v1",d="ghostRoomVisited_v1";function s(){try{if(window.currentUser&&window.currentUser.nickname)return String(window.currentUser.nickname);var t=localStorage.getItem("ghostUser");if(t){var o=JSON.parse(t);if(o&&o.nickname)return String(o.nickname)}}catch(t){}return"익명"}function u(){try{var t=localStorage.getItem(d);if(t){var o=JSON.parse(t||"{}");return o&&"object"==typeof o?o:{}}}catch(t){}return{}}function g(t){try{localStorage.setItem(d,JSON.stringify(t||{}))}catch(t){}try{window.dispatchEvent(new CustomEvent("ghost:visited-rooms-updated",{detail:{visited:t||{}}}))}catch(t){}try{window.SignalBus&&"function"==typeof window.SignalBus.syncRooms&&window.SignalBus.syncRooms(v(n||[]),"rooms-panel")}catch(t){}}function f(t){try{if(!(t=t?String(t).trim():""))return;var o=u();o[t]=Date.now(),o.global=o.global||Date.now(),g(o)}catch(t){}}function h(t){try{if(!(t=t?String(t).trim():""))return;var o=u();delete o[t],o.global=o.global||Date.now(),g(o)}catch(t){}}function p(t){return"function"!=typeof window.postToSheet?Promise.reject(new Error("postToSheet missing")):window.postToSheet(t).then(function(t){return t.text().then(function(t){var o={};try{o=JSON.parse(t||"{}")}catch(t){}return o})})}function w(t){var o=Array.isArray(t)?t.slice():[];return o=function(t){for(var o=Array.isArray(t)?t:[],e=!1,r=0;r<o.length;r++)if(o[r]&&"global"===String(o[r].room_id||"")){e=!0;break}return e||o.unshift({room_id:"global",name:"전체 대화방",is_public:!0,has_password:!1,enter_mode:"public",participants:[],members_count:0,is_global:!0,can_leave:!1}),o}(o),o.sort(function(t,o){var e=t&&(t.is_global||"global"===String(t.room_id||"")),r=o&&(o.is_global||"global"===String(o.room_id||""));if(e&&!r)return-1;if(!e&&r)return 1;if(!t||!o)return 0;var n=0,a=0;try{var i=JSON.parse(localStorage.getItem("ghostUnreadCounts_v1")||"{}");n=i[String(t.room_id||"")]||0,a=i[String(o.room_id||"")]||0}catch(t){}if(n>0&&0===a)return-1;if(0===n&&a>0)return 1;var c=0,l=0;try{var m=JSON.parse(localStorage.getItem("ghostRoomVisited_v1")||"{}");c=m[String(t.room_id||"")]||0,l=m[String(o.room_id||"")]||0}catch(t){}return c!==l?l-c:String(t.name||"").localeCompare(String(o.name||""),"ko")}),o}function v(t){var o=Array.isArray(t)?t:[],e=[],r=u();function n(t){t&&(t=String(t),e.indexOf(t)>=0||e.push(t))}r=r&&"object"==typeof r?r:{},n("global");for(var a=Object.keys(r||{}),i=0;i<a.length&&e.length<30;i++){var c=String(a[i]||"");if(c&&"global"!==c)o.some(function(t){return t&&String(t.room_id||"")===c})&&n(c)}return e.slice(0,30)}function _(){t&&(t.innerHTML="",n.forEach(function(o){if(o&&o.room_id){var e=document.createElement("button");e.type="button",e.className="room-item"+(o.room_id===a?" active":""),e.setAttribute("data-room-id",o.room_id);var r=document.createElement("div");r.className="room-item-icon";var n=Array.isArray(o.participants)?o.participants:[];if("global"===o.room_id)r.textContent="🌐",r.style.fontSize="22px";else if(0===n.length)r.textContent="💬",r.style.fontSize="20px";else{var i=n.slice(0,4);r.classList.add(1===i.length?"room-icon-grid-1":2===i.length?"room-icon-grid-2":"room-icon-grid-4"),i.forEach(function(t){var o=document.createElement("img");o.className="room-icon-avatar",o.setAttribute("data-profile-nick",t),o.alt=t,o.src=window.ProfileManager&&window.ProfileManager.getAvatarUrl?window.ProfileManager.getAvatarUrl(t):"",o.onerror=function(){this.onerror=null,this.src=window.ProfileManager&&window.ProfileManager.DEFAULT_AVATAR||""},window.ProfileManager&&window.ProfileManager.fetchAndCacheProfile&&setTimeout(function(){window.ProfileManager.fetchAndCacheProfile(t)},600),r.appendChild(o)})}e.appendChild(r);var c=document.createElement("div");c.className="room-item-info";var l=document.createElement("div");l.className="room-name",l.textContent=o.name||"대화방",c.appendChild(l);var m=document.createElement("div");m.className="room-meta";var d=!!o.has_password||"password"===o.enter_mode,u="number"==typeof o.members_count?o.members_count:n.length?n.length:0,g=s(),w=!d||n.indexOf(g)>=0;m.textContent=d&&!w?"🔒 비번 필요":d?u?"참여 "+u+"명":"🔒 비번방":u?"참여 "+u+"명":"공개방",c.appendChild(m),e.appendChild(c);try{window.RoomUnreadBadge&&"function"==typeof window.RoomUnreadBadge.applyToItem&&window.RoomUnreadBadge.applyToItem(e,o.room_id)}catch(t){}if(e.addEventListener("click",function(){var t=s(),e=String(o.room_id||"");if(e){var r=a||"global",n=!!o.has_password||"password"===o.enter_mode,i=(Array.isArray(o.participants)?o.participants:[]).indexOf(t)>=0;if(!n||i)y(e),f(e),p({mode:"social_room_enter",room_id:e,nickname:t}).then(function(t){if(!t||!t.ok)return h(e),y(r),void alert(t&&t.error||"입장에 실패했어요.");b()}).catch(function(){h(e),y(r),alert("입장에 실패했어요.")});else{var c=prompt("이 대화방은 비밀번호가 필요해요.","");if(null===c)return;p({mode:"social_room_enter",room_id:e,nickname:t,password:(c||"").trim()}).then(function(t){t&&t.ok?(y(e),f(e),b()):alert(t&&t.error||"입장에 실패했어요.")}).catch(function(){alert("입장에 실패했어요.")})}}}),!1!==o.can_leave&&!o.is_global&&"global"!==String(o.room_id||"")){var v=null,_=function(){clearTimeout(v),v=setTimeout(function(){(function(t){if(!t||!t.room_id)return;if(!1===t.can_leave||"global"===String(t.room_id||"")||t.is_global)return void alert("전체 대화방은 나갈 수 없어요.");if(!confirm("이 대화방에서 나갈까요?\n(나가면 더 이상 이 방의 대화를 볼 수 없어요)"))return;p({mode:"social_room_leave",room_id:t.room_id,nickname:s()}).then(function(o){if(o&&o.ok){h(t.room_id);try{window.RoomUnreadBadge&&"function"==typeof window.RoomUnreadBadge.clear&&window.RoomUnreadBadge.clear(t.room_id)}catch(t){}b().then(function(){y(null)})}else alert(o&&o.error||"나가기에 실패했어요.")}).catch(function(){alert("나가기에 실패했어요.")})})(o)},650)},S=function(){clearTimeout(v),v=null};e.addEventListener("pointerdown",_),e.addEventListener("pointerup",S),e.addEventListener("pointercancel",S),e.addEventListener("pointerleave",S),e.addEventListener("touchstart",_,{passive:!0}),e.addEventListener("touchend",S)}t.appendChild(e)}}),function(){i=null;for(var t=0;t<n.length;t++)n[t]&&n[t].room_id===a&&(i=n[t]);if(!i){e&&(e.textContent="대화방"),r&&(r.textContent="");try{var o=document.getElementById("msgInput"),c=document.getElementById("msgSendBtn");o&&(o.disabled=!0,o.placeholder="대화방을 선택해 주세요"),c&&(c.disabled=!0)}catch(t){}return}e&&(e.textContent=i.name||"대화방");if(r){if(!!i.is_global||"global"===String(i.room_id||"")||!1===i.can_leave)r.textContent="나가기 불가";else{var l=(i.participants||[]).slice(),m=l.join(", ");m.length>40&&(m=m.slice(0,40)+"…"),r.textContent=l.length?"참여자: "+m:""}}try{var d=document.getElementById("msgInput"),u=document.getElementById("msgSendBtn"),g=!0;if(i&&i.room_id){var f=s();g=!!i.is_public||"public"===String(i.enter_mode||"")||!Array.isArray(i.participants)||0===i.participants.length||Array.isArray(i.participants)&&i.participants.indexOf(f)>=0}d&&(d.disabled=!g),u&&(u.disabled=!g),d&&(g?d.placeholder="메시지를 입력하세요":i&&(i.has_password||"password"===i.enter_mode)?d.placeholder="비밀번호로 입장 후 대화할 수 있어요":d.placeholder="입장 권한이 없어요")}catch(t){}}())}function y(t){if(t=(t=t?String(t):"").trim()){a=t;try{window.RoomUnreadBadge&&"function"==typeof window.RoomUnreadBadge.clear&&window.RoomUnreadBadge.clear(a)}catch(t){}try{localStorage.setItem(c,String(t))}catch(t){}try{for(var o="",e=0;e<n.length;e++)if(n[e]&&n[e].room_id===a){o=n[e].name||"";break}o&&localStorage.setItem(l,String(o))}catch(t){}_();try{"function"==typeof window.__onRoomChanged&&window.__onRoomChanged(a,i)}catch(t){}}else{a=null;try{localStorage.removeItem(c),localStorage.removeItem(l)}catch(t){}_();try{"function"==typeof window.__onRoomChanged&&window.__onRoomChanged("",null)}catch(t){}}}function S(){try{for(var t=s(),o=0,e=0;e<n.length;e++){var r=n[e];r&&r.room_id&&((r.creator&&String(r.creator)===t||Array.isArray(r.participants)&&r.participants.length&&String(r.participants[0]||"")===t&&(r.has_password||"password"===r.enter_mode))&&o++)}if(o>=3)return void alert("생성불가\n한 명당 최대 3개의 방만 만들 수 있어요.")}catch(t){}var a=prompt("새 대화방 이름(선택)\n비워두면 자동으로 만들어져요.","");if(null!==a){var i=prompt("입장 비밀번호(선택)\n비워두면 공개방(누구나 목록에서 입장)으로 만들어져요.","");null!==i&&p({mode:"social_room_create",nickname:s(),title:a||"",room_name:a||"",password:(i||"").trim()}).then(function(t){t&&t.ok?b().then(function(){alert("대화방을 만들었어요.\n방 목록에서 선택해 입장해 주세요.")}):alert(t&&t.error||"대화방 생성에 실패했어요.")}).catch(function(){alert("대화방 생성에 실패했어요.")})}}function b(){return window.FirebaseRooms&&"function"==typeof window.FirebaseRooms.loadRoomsFromFirebase&&window.FirebaseRooms.loadRoomsFromFirebase().then(function(t){if(t&&t.length>0){var o=w(t);n=o,_()}}).catch(function(){}),p({mode:"social_rooms",nickname:s()}).then(function(t){if(!t||!t.ok)throw new Error("rooms api fail");n=w(t.rooms||[]);try{window.FirebaseRooms&&window.FirebaseRooms.syncRoomsToFirebase(t.rooms||[])}catch(t){}!function(t){try{var o=Array.isArray(t)?t:[],e=u();e=e&&"object"==typeof e?e:{};for(var r={global:!0},n=0;n<o.length;n++){var a=o[n];a&&a.room_id&&(r[String(a.room_id)]=!0)}var i=!1;Object.keys(e).forEach(function(t){t&&"global"!==t&&(r[t]||(delete e[t],i=!0))}),i&&g(e)}catch(t){}}(n);try{var o=(n||[]).map(function(t){return t?{room_id:t.room_id||"",name:t.name||"",participants:Array.isArray(t.participants)?t.participants:[],has_password:!!t.has_password,enter_mode:t.enter_mode||"",is_public:!!t.is_public,creator:t.creator||"",is_global:!!t.is_global,can_leave:!1!==t.can_leave}:null}).filter(Boolean);localStorage.setItem(m,JSON.stringify({ts:Date.now(),rooms:o}))}catch(t){}try{window.SignalBus&&"function"==typeof window.SignalBus.syncRooms&&window.SignalBus.syncRooms(v(n||[]),"rooms-panel")}catch(t){}var e=a;if(!!a&&n.some(function(t){return t&&t.room_id===a}))try{var r=R();r&&r.name&&localStorage.setItem(l,String(r.name))}catch(t){}else{a=null;try{localStorage.removeItem(c),localStorage.removeItem(l)}catch(t){}}_();try{e!==a&&"function"==typeof window.__onRoomChanged&&window.__onRoomChanged(a,R())}catch(t){}return n}).catch(function(){var t=a;n=w([]),a=null;try{localStorage.removeItem(m)}catch(t){}try{localStorage.removeItem(c),localStorage.removeItem(l)}catch(t){}_();try{t&&"function"==typeof window.__onRoomChanged&&window.__onRoomChanged("",null)}catch(t){}return n})}function R(){for(var t=0;t<n.length;t++)if(n[t]&&n[t].room_id===a)return n[t];return null}window.ChatRooms={init:function(){try{var i=u();i&&"object"==typeof i||(i={}),i.global||(i.global=Date.now(),g(i))}catch(t){}t=document.getElementById("roomList"),o=document.getElementById("roomAddBtn"),e=document.getElementById("roomTitle"),r=document.getElementById("roomSub"),o&&o.addEventListener("click",S),a=null;try{var d=localStorage.getItem(c)||"";a=d&&String(d).trim()?String(d).trim():"global"}catch(t){a=null}n=w([]);try{var s=localStorage.getItem(m);if(s){var f=JSON.parse(s||"{}");f&&f.rooms&&(n=w(f.rooms))}}catch(t){}try{for(var h=!1,p=0;p<n.length;p++)if(n[p]&&n[p].room_id===a){h=!0;break}if(!h&&a){var y="";try{y=localStorage.getItem(l)||""}catch(t){}n.push({room_id:a,name:y||"대화방",participants:[]}),n=w(n)}}catch(t){}try{var b=localStorage.getItem(l);e&&b&&(e.textContent=String(b))}catch(t){}_();try{window.SignalBus&&"function"==typeof window.SignalBus.syncRooms&&window.SignalBus.syncRooms(v(n||[]))}catch(t){}return Promise.resolve(n)},reload:b,setActive:y,getRooms:function(){return n.slice()},getActiveRoomId:function(){return a},getActiveRoom:R}}();
+/* ============================================================
+   [chat-rooms.js]  "대화방 목록 + 방 전환/생성/나가기" UI
+   ------------------------------------------------------------
+   - games/social-messenger.html 에서 사용
+   - Apps Script(postToSheet)로 대화방 목록/생성/나가기를 요청
+   - '전체 대화방' (room_id='global') 은 항상 1번, 나가기 불가
+
+   [제거 시 함께 삭제/정리할 요소]
+   1) games/social-messenger.html 의 #roomPanel / #roomList / #roomAddBtn / #roomTitle / #roomSub
+   2) games/social-messenger.html 에 추가된 .room-* / .chat-* CSS
+   3) games/social-messenger.html 의 chat-rooms.js include
+   4) js/social-messenger.js 의 window.ChatRooms 연동부
+   ============================================================ */
+
+(function () {
+  var roomListEl = null;
+  var addBtnEl = null;
+  var titleEl = null;
+  var subEl = null;
+
+  var rooms = [];
+  var activeRoomId = null;
+  var activeRoom = null;
+
+  var LS_ACTIVE_ID = "ghostActiveRoomId";
+  var LS_ACTIVE_NAME = "ghostActiveRoomName";
+  var LS_ROOMS_CACHE = "ghostRoomsCache_v1";
+  var LS_VISITED = "ghostRoomVisited_v1"; // 내가 실제로 들어간(확인한) 방만 알림/표시
+
+  var LONGPRESS_MS = 650;
+
+  function safeNick() {
+    try {
+      if (window.currentUser && window.currentUser.nickname) return String(window.currentUser.nickname);
+      var raw = localStorage.getItem("ghostUser");
+      if (raw) {
+        var u = JSON.parse(raw);
+        if (u && u.nickname) return String(u.nickname);
+      }
+    } catch (e) {}
+    return "익명";
+  }
+
+  function loadVisitedMap() {
+    try {
+      var raw = localStorage.getItem(LS_VISITED);
+      if (raw) {
+        var obj = JSON.parse(raw || "{}");
+        return (obj && typeof obj === "object") ? obj : {};
+      }
+    } catch (e) {}
+    return {};
+  }
+
+  function saveVisitedMap(map) {
+    try { localStorage.setItem(LS_VISITED, JSON.stringify(map || {})); } catch (e) {}
+
+    // 같은 탭에서도 즉시 반영
+    try {
+      window.dispatchEvent(new CustomEvent("ghost:visited-rooms-updated", { detail: { visited: map || {} } }));
+    } catch (e2) {}
+
+    // signals 구독 갱신(방 목록 패널 key)
+    try {
+      if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
+        window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []), "rooms-panel");
+      }
+    } catch (e3) {}
+  }
+
+  function markVisitedRoom(roomId) {
+    try {
+      roomId = roomId ? String(roomId).trim() : "";
+      if (!roomId) return;
+      var map = loadVisitedMap();
+      map[roomId] = Date.now();
+      map["global"] = map["global"] || Date.now();
+      saveVisitedMap(map);
+    } catch (e) {}
+  }
+
+  function removeVisitedRoom(roomId) {
+    try {
+      roomId = roomId ? String(roomId).trim() : "";
+      if (!roomId) return;
+      var map = loadVisitedMap();
+      delete map[roomId];
+      map["global"] = map["global"] || Date.now();
+      saveVisitedMap(map);
+    } catch (e) {}
+  }
+
+  function pruneVisitedAgainstRooms(roomList) {
+    try {
+      var list = Array.isArray(roomList) ? roomList : [];
+      var map = loadVisitedMap();
+      map = (map && typeof map === "object") ? map : {};
+      var allowed = { "global": true };
+      for (var i = 0; i < list.length; i++) {
+        var r = list[i];
+        if (!r || !r.room_id) continue;
+        allowed[String(r.room_id)] = true;
+      }
+      var changed = false;
+      Object.keys(map).forEach(function (rid) {
+        if (!rid || rid === "global") return;
+        if (!allowed[rid]) { delete map[rid]; changed = true; }
+      });
+      if (changed) saveVisitedMap(map);
+    } catch (e) {}
+  }
+
+  function api(payload) {
+    if (typeof window.postToSheet !== "function") return Promise.reject(new Error("postToSheet missing"));
+    return window.postToSheet(payload).then(function (res) {
+      return res.text().then(function (t) {
+        var json = {};
+        try { json = JSON.parse(t || "{}"); } catch (e) {}
+        return json;
+      });
+    });
+  }
+
+    function ensureGlobalRoom(list) {
+    var arr = Array.isArray(list) ? list : [];
+    var has = false;
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i] && String(arr[i].room_id || "") === "global") { has = true; break; }
+    }
+    if (!has) {
+      arr.unshift({
+        room_id: "global",
+        name: "전체 대화방",
+        is_public: true,
+        has_password: false,
+        enter_mode: "public",
+        participants: [],
+        members_count: 0,
+        is_global: true,
+        can_leave: false
+      });
+    }
+    return arr;
+  }
+
+  function normalizeRooms(list) {
+    var out = Array.isArray(list) ? list.slice() : [];
+    out = ensureGlobalRoom(out);
+
+    // 정렬: global 항상 맨 위 → 미확인 있는 방 → 최근 방문 순
+    out.sort(function (a, b) {
+      var ag = a && (a.is_global || String(a.room_id || "") === "global");
+      var bg = b && (b.is_global || String(b.room_id || "") === "global");
+      if (ag && !bg) return -1;
+      if (!ag && bg) return 1;
+      if (!a || !b) return 0;
+
+      // 미확인(unread) 있는 방 우선
+      var aUnread = 0, bUnread = 0;
+      try {
+        var counts = JSON.parse(localStorage.getItem("ghostUnreadCounts_v1") || "{}");
+        aUnread = counts[String(a.room_id || "")] || 0;
+        bUnread = counts[String(b.room_id || "")] || 0;
+      } catch(e) {}
+      if (aUnread > 0 && bUnread === 0) return -1;
+      if (aUnread === 0 && bUnread > 0) return 1;
+
+      // 최근 방문한 방 우선
+      var aTs = 0, bTs = 0;
+      try {
+        var visited = JSON.parse(localStorage.getItem("ghostRoomVisited_v1") || "{}");
+        aTs = visited[String(a.room_id || "")] || 0;
+        bTs = visited[String(b.room_id || "")] || 0;
+      } catch(e) {}
+      if (aTs !== bTs) return bTs - aTs; // 최근 방문 내림차순
+
+      return (String(a.name || "")).localeCompare(String(b.name || ""), "ko");
+    });
+    return out;
+  }
+
+  // signals 구독 대상(내 소속 방들)만 추려내기
+  // - 글로벌은 항상 포함
+  // - 초대(멤버)방 기능을 제거했으므로, 방 목록(캐시 포함)에 있는 방들은
+  //   메시지 내용을 불러오지 않고도 'signals'만 구독해서 알림만 받을 수 있음
+  
+  function getMySignalRoomIds(list) {
+    var arr = Array.isArray(list) ? list : [];
+    var ids = [];
+    var visited = loadVisitedMap();
+    visited = (visited && typeof visited === "object") ? visited : {};
+
+    function add(id) {
+      if (!id) return;
+      id = String(id);
+      if (ids.indexOf(id) >= 0) return;
+      ids.push(id);
+    }
+
+    add("global");
+
+    var vIds = Object.keys(visited || {});
+    for (var i = 0; i < vIds.length && ids.length < 30; i++) {
+      var rid = String(vIds[i] || "");
+      if (!rid || rid === "global") continue;
+      var exists = arr.some(function (r) { return r && String(r.room_id || "") === rid; });
+      if (exists) add(rid);
+    }
+    return ids.slice(0, 30);
+  }
+
+  function render() {
+    if (!roomListEl) return;
+    roomListEl.innerHTML = "";
+    rooms.forEach(function (r) {
+      if (!r || !r.room_id) return;
+
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "room-item" + (r.room_id === activeRoomId ? " active" : "");
+      item.setAttribute("data-room-id", r.room_id);
+
+      // ── 프로필 그리드 아이콘 (카톡 스타일) ──
+      var icon = document.createElement("div");
+      icon.className = "room-item-icon";
+      var participants2 = Array.isArray(r.participants) ? r.participants : [];
+
+      if (r.room_id === "global") {
+        icon.textContent = "🌐";
+        icon.style.fontSize = "22px";
+      } else if (participants2.length === 0) {
+        icon.textContent = "💬";
+        icon.style.fontSize = "20px";
+      } else {
+        var showList = participants2.slice(0, 4);
+        icon.classList.add(
+          showList.length === 1 ? "room-icon-grid-1" :
+          showList.length === 2 ? "room-icon-grid-2" : "room-icon-grid-4"
+        );
+        showList.forEach(function (nick) {
+          var av = document.createElement("img");
+          av.className = "room-icon-avatar";
+          av.setAttribute("data-profile-nick", nick);
+          av.alt = nick;
+          av.src = (window.ProfileManager && window.ProfileManager.getAvatarUrl)
+            ? window.ProfileManager.getAvatarUrl(nick) : "";
+          av.onerror = function () {
+            this.onerror = null;
+            this.src = (window.ProfileManager && window.ProfileManager.DEFAULT_AVATAR) || "";
+          };
+          if (window.ProfileManager && window.ProfileManager.fetchAndCacheProfile) {
+            setTimeout(function () { window.ProfileManager.fetchAndCacheProfile(nick); }, 600);
+          }
+          icon.appendChild(av);
+        });
+      }
+      item.appendChild(icon);
+
+      // 정보 래퍼
+      var info = document.createElement("div");
+      info.className = "room-item-info";
+
+      var name = document.createElement("div");
+      name.className = "room-name";
+      name.textContent = r.name || "대화방";
+      info.appendChild(name);
+
+      var meta = document.createElement("div");
+      meta.className = "room-meta";
+      var hasPwd2 = !!r.has_password || (r.enter_mode === "password");
+      var c = (typeof r.members_count === "number") ? r.members_count
+            : (participants2.length ? participants2.length : 0);
+      var me2 = safeNick();
+      var isMember2 = !hasPwd2 || (participants2.indexOf(me2) >= 0);
+      if (hasPwd2 && !isMember2) meta.textContent = "🔒 비번 필요";
+      else if (hasPwd2) meta.textContent = c ? ("참여 " + c + "명") : "🔒 비번방";
+      else meta.textContent = c ? ("참여 " + c + "명") : "공개방";
+      info.appendChild(meta);
+      item.appendChild(info);
+
+      // 미확인 배지
+      try {
+        if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.applyToItem === "function") {
+          window.RoomUnreadBadge.applyToItem(item, r.room_id);
+        }
+      } catch (eBadge) {}
+
+      // 클릭 = 방 전환
+      item.addEventListener("click", function () {
+  var me = safeNick();
+
+  var targetId = String(r.room_id || "");
+  if (!targetId) return;
+
+  var prevId = activeRoomId || "global";
+
+  var hasPwd = !!r.has_password || (r.enter_mode === "password");
+  var participants = Array.isArray(r.participants) ? r.participants : [];
+  var isMember = participants.indexOf(me) >= 0;
+
+  // 1) 비번방 + 비멤버 → 비번 입력 후 입장 성공 시에만 활성화(실패하면 그대로)
+  if (hasPwd && !isMember) {
+    var pwd = prompt("이 대화방은 비밀번호가 필요해요.", "");
+    if (pwd === null) return;
+
+    api({ mode: "social_room_enter", room_id: targetId, nickname: me, password: (pwd || "").trim() })
+      .then(function (json) {
+        if (!json || !json.ok) {
+          alert((json && json.error) || "입장에 실패했어요.");
+          return;
+        }
+        // 성공하면 즉시 활성화(중요: loadRooms 대기 금지)
+        setActiveRoom(targetId);
+        markVisitedRoom(targetId);
+        // 명단/라벨 반영은 백그라운드로 갱신
+        loadRooms();
+      })
+      .catch(function () { alert("입장에 실패했어요."); });
+    return;
+  }
+
+  // 2) 공개방 또는 이미 멤버인 방 → 즉시 활성화(중요: 입장 API 대기 금지)
+  setActiveRoom(targetId);
+  markVisitedRoom(targetId);
+
+  // 입장 기록(멤버 등록/명단 반영)은 백그라운드로 처리
+  api({ mode: "social_room_enter", room_id: targetId, nickname: me })
+    .then(function (json) {
+      if (!json || !json.ok) {
+        // 예외적으로 실패하면 이전 방으로 복귀
+        removeVisitedRoom(targetId);
+        setActiveRoom(prevId);
+        alert((json && json.error) || "입장에 실패했어요.");
+        return;
+      }
+      loadRooms();
+    })
+    .catch(function () {
+      removeVisitedRoom(targetId);
+      setActiveRoom(prevId);
+      alert("입장에 실패했어요.");
+    });
+});
+
+// 꾹 누르기 = 나가기(단, 전체 대화방은 불가)
+      if (r.can_leave !== false && !r.is_global && String(r.room_id || "") !== "global") {
+        var t = null;
+        var fired = false;
+
+        var start = function () {
+          fired = false;
+          clearTimeout(t);
+          t = setTimeout(function () {
+            fired = true;
+            askLeave(r);
+          }, LONGPRESS_MS);
+        };
+        var cancel = function () {
+          clearTimeout(t);
+          t = null;
+        };
+
+        item.addEventListener("pointerdown", start);
+        item.addEventListener("pointerup", cancel);
+        item.addEventListener("pointercancel", cancel);
+        item.addEventListener("pointerleave", cancel);
+        // iOS Safari fallback
+        item.addEventListener("touchstart", start, { passive: true });
+        item.addEventListener("touchend", cancel);
+      }
+
+      roomListEl.appendChild(item);
+    });
+
+    updateHeader();
+  }
+
+  function updateHeader() {
+    activeRoom = null;
+    for (var i = 0; i < rooms.length; i++) {
+      if (rooms[i] && rooms[i].room_id === activeRoomId) activeRoom = rooms[i];
+    }
+    if (!activeRoom) {
+      if (titleEl) titleEl.textContent = "대화방";
+      if (subEl) subEl.textContent = "";
+      try {
+        var input0 = document.getElementById("msgInput");
+        var send0 = document.getElementById("msgSendBtn");
+        if (input0) { input0.disabled = true; input0.placeholder = "대화방을 선택해 주세요"; }
+        if (send0) send0.disabled = true;
+      } catch (e0) {}
+      return;
+    }
+
+    if (titleEl) titleEl.textContent = activeRoom.name || "대화방";
+        if (subEl) {
+      var isGlobal = !!activeRoom.is_global || (String(activeRoom.room_id || "") === "global") || (activeRoom.can_leave === false);
+      if (isGlobal) {
+        subEl.textContent = "나가기 불가";
+      } else {
+        var p = (activeRoom.participants || []).slice();
+        // 너무 길면 자르기
+        var show = p.join(", ");
+        if (show.length > 40) show = show.slice(0, 40) + "…";
+        subEl.textContent = p.length ? ("참여자: " + show) : "";
+      }
+    }
+
+    // 입력창 활성/비활성: 참여자가 아니면 막기(서버가 돌려준 참가자 기준)
+    try {
+      var input = document.getElementById("msgInput");
+      var sendBtn = document.getElementById("msgSendBtn");
+      var isMember = true;
+      if (activeRoom && activeRoom.room_id) {
+        var me = safeNick();
+        // 공개방(participants 비움)은 누구나 대화 가능
+        var isPublic = !!activeRoom.is_public || (String(activeRoom.enter_mode || "") === "public") || (!Array.isArray(activeRoom.participants) || activeRoom.participants.length === 0);
+        isMember = isPublic || (Array.isArray(activeRoom.participants) && activeRoom.participants.indexOf(me) >= 0);
+      }
+      if (input) input.disabled = !isMember;
+      if (sendBtn) sendBtn.disabled = !isMember;
+      if (input) {
+        if (isMember) input.placeholder = "메시지를 입력하세요";
+        else if (activeRoom && (activeRoom.has_password || activeRoom.enter_mode === "password")) input.placeholder = "비밀번호로 입장 후 대화할 수 있어요";
+        else input.placeholder = "입장 권한이 없어요";
+      }
+    } catch (e) {}
+  }
+
+  function setActiveRoom(roomId) {
+    roomId = roomId ? String(roomId) : "";
+    roomId = roomId.trim();
+    if (!roomId) {
+      activeRoomId = null;
+      try { localStorage.removeItem(LS_ACTIVE_ID); localStorage.removeItem(LS_ACTIVE_NAME); } catch (e0) {}
+      render();
+      try { if (typeof window.__onRoomChanged === "function") window.__onRoomChanged("", null); } catch (e1) {}
+      return;
+    }
+    activeRoomId = roomId;
+
+    // 해당 방을 "확인"한 것으로 처리 → 미확인 표시 제거
+    try {
+      if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") {
+        window.RoomUnreadBadge.clear(activeRoomId);
+      }
+    } catch (eBadge2) {}
+    try { localStorage.setItem(LS_ACTIVE_ID, String(roomId)); } catch (e) {}
+    // 방 이름도 저장(재접속 시 상단 표시용)
+    try {
+      var nm = "";
+      for (var i2 = 0; i2 < rooms.length; i2++) {
+        if (rooms[i2] && rooms[i2].room_id === activeRoomId) { nm = rooms[i2].name || ""; break; }
+      }
+      if (nm) localStorage.setItem(LS_ACTIVE_NAME, String(nm));
+    } catch (e2) {}
+
+    render();
+
+    // social-messenger.js 에 알림
+    try {
+      if (typeof window.__onRoomChanged === "function") {
+        window.__onRoomChanged(activeRoomId, activeRoom);
+      }
+    } catch (e) {}
+  }
+
+    function askLeave(room) {
+    if (!room || !room.room_id) return;
+
+    // 전체 대화방(global)은 나가기 불가
+    if (room.can_leave === false || String(room.room_id || "") === "global" || room.is_global) {
+      alert("전체 대화방은 나갈 수 없어요.");
+      return;
+    }
+
+    var ok = confirm("이 대화방에서 나갈까요?\n(나가면 더 이상 이 방의 대화를 볼 수 없어요)");
+    if (!ok) return;
+
+    api({
+      mode: "social_room_leave",
+      room_id: room.room_id,
+      nickname: safeNick()
+    }).then(function (json) {
+      if (!json || !json.ok) {
+        alert((json && json.error) || "나가기에 실패했어요.");
+        return;
+      }
+      // 방문(입장) 기록 제거 + 미확인 점 제거
+      removeVisitedRoom(room.room_id);
+      try { if (window.RoomUnreadBadge && typeof window.RoomUnreadBadge.clear === "function") window.RoomUnreadBadge.clear(room.room_id); } catch (eBadge) {}
+
+      // 나간 뒤에는 현재 방이면 비우기
+      loadRooms().then(function () {
+        setActiveRoom(null);
+      });
+    }).catch(function () {
+      alert("나가기에 실패했어요.");
+    });
+  }
+
+  function openCreateDialog() {
+    // 1인당 생성 제한: 3개
+    try {
+      var me = safeNick();
+      var count = 0;
+      for (var i = 0; i < rooms.length; i++) {
+        var r = rooms[i];
+        if (!r || !r.room_id) continue;
+        // 서버가 creator를 내려주는 경우(권장)
+        if (r.creator && String(r.creator) === me) { count++; continue; }
+        // fallback(구버전 서버): 비밀번호 방은 participants[0]이 생성자일 가능성이 높음
+        if (Array.isArray(r.participants) && r.participants.length && String(r.participants[0] || "") === me && (r.has_password || r.enter_mode === "password")) {
+          count++;
+        }
+      }
+      if (count >= 3) {
+        alert("생성불가\n한 명당 최대 3개의 방만 만들 수 있어요.");
+        return;
+      }
+    } catch (e) {}
+
+    var roomName = prompt("새 대화방 이름(선택)\n비워두면 자동으로 만들어져요.", "");
+    if (roomName === null) return;
+
+    var pwd = prompt("입장 비밀번호(선택)\n비워두면 공개방(누구나 목록에서 입장)으로 만들어져요.", "");
+    if (pwd === null) return;
+
+    api({
+      mode: "social_room_create",
+      nickname: safeNick(),
+      title: roomName || "",
+      room_name: roomName || "",
+      password: (pwd || "").trim()
+    }).then(function (json) {
+      if (!json || !json.ok) {
+        alert((json && json.error) || "대화방 생성에 실패했어요.");
+        return;
+      }
+      loadRooms().then(function () {
+        alert("대화방을 만들었어요.\n방 목록에서 선택해 입장해 주세요.");
+      });
+    }).catch(function () {
+      alert("대화방 생성에 실패했어요.");
+    });
+  }
+
+  function loadRooms() {
+    // Firebase에서 먼저 빠르게 렌더 (캐시 역할)
+    if (window.FirebaseRooms && typeof window.FirebaseRooms.loadRoomsFromFirebase === "function") {
+      window.FirebaseRooms.loadRoomsFromFirebase().then(function (fbRooms) {
+        if (fbRooms && fbRooms.length > 0) {
+          var merged = normalizeRooms(fbRooms);
+          rooms = merged;
+          render(); // Firebase 데이터로 즉시 표시
+        }
+      }).catch(function () {});
+    }
+
+    // 시트 API로 정확한 데이터 갱신 (백그라운드)
+    return api({
+      mode: "social_rooms",
+      nickname: safeNick()
+    }).then(function (json) {
+      if (!json || !json.ok) throw new Error("rooms api fail");
+      rooms = normalizeRooms(json.rooms || []);
+
+      // 시트에서 받은 방 목록을 Firebase에 동기화 (다음 로딩 시 빠르게)
+      try {
+        if (window.FirebaseRooms) window.FirebaseRooms.syncRoomsToFirebase(json.rooms || []);
+      } catch (eFbSync) {}
+
+      // 방문 기록은 현재 목록 기준으로 정리(삭제된 방 구독 방지)
+      pruneVisitedAgainstRooms(rooms);
+
+      // 방 목록 캐시(localStorage)
+      try {
+        var slim = (rooms || []).map(function (r) {
+          if (!r) return null;
+          return {
+            room_id: r.room_id || "",
+            name: r.name || "",
+            participants: Array.isArray(r.participants) ? r.participants : [],
+            has_password: !!r.has_password,
+            enter_mode: r.enter_mode || "",
+            is_public: !!r.is_public,
+            creator: r.creator || "",
+            is_global: !!r.is_global,
+            can_leave: (r.can_leave !== false)
+          };
+        }).filter(Boolean);
+        localStorage.setItem(LS_ROOMS_CACHE, JSON.stringify({ ts: Date.now(), rooms: slim }));
+      } catch (eCache) {}
+
+      // signals 구독 대상 갱신
+      try {
+        if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
+          window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []), "rooms-panel");
+        }
+      } catch (e) {}
+
+      var prev = activeRoomId;
+      var exists = activeRoomId ? rooms.some(function (r) { return r && r.room_id === activeRoomId; }) : false;
+      if (!exists) {
+        activeRoomId = null;
+        try { localStorage.removeItem(LS_ACTIVE_ID); localStorage.removeItem(LS_ACTIVE_NAME); } catch (e0) {}
+      } else {
+        try {
+          var ar = getActiveRoom();
+          if (ar && ar.name) localStorage.setItem(LS_ACTIVE_NAME, String(ar.name));
+        } catch (e1) {}
+      }
+
+      render();
+
+      try {
+        if (prev !== activeRoomId && typeof window.__onRoomChanged === "function") {
+          window.__onRoomChanged(activeRoomId, getActiveRoom());
+        }
+      } catch (e2) {}
+      return rooms;
+    }).catch(function () {
+      var prev = activeRoomId;
+      rooms = normalizeRooms([]);
+      activeRoomId = null;
+      try { localStorage.removeItem(LS_ROOMS_CACHE); } catch (eCache2) {}
+      try { localStorage.removeItem(LS_ACTIVE_ID); localStorage.removeItem(LS_ACTIVE_NAME); } catch (e0) {}
+
+      render();
+      try {
+        if (prev && typeof window.__onRoomChanged === "function") window.__onRoomChanged("", null);
+      } catch (e) {}
+      return rooms;
+    });
+  }
+
+  function getActiveRoom() {
+    for (var i = 0; i < rooms.length; i++) {
+      if (rooms[i] && rooms[i].room_id === activeRoomId) return rooms[i];
+    }
+    return null;
+  }
+
+  function init() {
+    // global은 기본 방문 처리
+    try {
+      var vm = loadVisitedMap();
+      if (!vm || typeof vm !== "object") vm = {};
+      if (!vm["global"]) { vm["global"] = Date.now(); saveVisitedMap(vm); }
+    } catch (e) {}
+
+    roomListEl = document.getElementById("roomList");
+    addBtnEl = document.getElementById("roomAddBtn");
+    titleEl = document.getElementById("roomTitle");
+    subEl = document.getElementById("roomSub");
+
+    if (addBtnEl) addBtnEl.addEventListener("click", openCreateDialog);
+
+    // 활성 방 복원(목록 API 호출 없이)
+    activeRoomId = null;
+    try {
+      var rid = localStorage.getItem(LS_ACTIVE_ID) || ""; activeRoomId = (rid && String(rid).trim()) ? String(rid).trim() : "global";
+    } catch (e0) { activeRoomId = null; }
+
+    // 캐시된 목록으로 1차 렌더(패널을 열 때만 서버에서 갱신)
+    rooms = normalizeRooms([]);
+    try {
+      var raw = localStorage.getItem(LS_ROOMS_CACHE);
+      if (raw) {
+        var cached = JSON.parse(raw || "{}");
+        if (cached && cached.rooms) rooms = normalizeRooms(cached.rooms);
+      }
+    } catch (e1) {}
+
+    // 캐시에 활성 방이 없으면(예: 첫 실행/캐시 삭제) 임시로 추가해서 표시 유지
+    try {
+      var has = false;
+      for (var k = 0; k < rooms.length; k++) {
+        if (rooms[k] && rooms[k].room_id === activeRoomId) { has = true; break; }
+      }
+      if (!has && activeRoomId) {
+        var nm2 = "";
+        try { nm2 = localStorage.getItem(LS_ACTIVE_NAME) || ""; } catch (eNm) {}
+        rooms.push({ room_id: activeRoomId, name: nm2 || "대화방", participants: [] });
+        rooms = normalizeRooms(rooms);
+      }
+    } catch (eTmp) {}
+
+    // 상단 표시용 이름도 복원(캐시에 없을 수 있음)
+    try {
+      var nm = localStorage.getItem(LS_ACTIVE_NAME);
+      if (titleEl && nm) titleEl.textContent = String(nm);
+    } catch (e2) {}
+
+    render();
+
+    // signals 구독 대상(캐시 기준) 설정 - db attach 전이어도 OK
+    try {
+      if (window.SignalBus && typeof window.SignalBus.syncRooms === "function") {
+        window.SignalBus.syncRooms(getMySignalRoomIds(rooms || []));
+      }
+    } catch (e3) {}
+
+    return Promise.resolve(rooms);
+  }
+
+  // 전역 노출
+  window.ChatRooms = {
+    init: init,
+    reload: loadRooms,
+    setActive: setActiveRoom,
+    getRooms: function () { return rooms.slice(); },
+    getActiveRoomId: function () { return activeRoomId; },
+    getActiveRoom: getActiveRoom
+  };
+})();

@@ -13,10 +13,6 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="마이파이">
   <meta name="theme-color" content="#4caf50">
-  <link rel="apple-touch-icon" sizes="120x120" href="images/icons/icon-120x120.png">
-  <link rel="apple-touch-icon" sizes="152x152" href="images/icons/icon-152x152.png">
-  <link rel="apple-touch-icon" sizes="167x167" href="images/icons/icon-167x167.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="images/icons/icon-180x180.png">
   <link rel="apple-touch-icon" href="images/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/ghost.css">
   <style>
@@ -85,19 +81,6 @@
         .then(function (reg) { console.log("[PWA] SW 등록:", reg.scope); })
         .catch(function (e) { console.warn("[PWA] SW 등록 실패:", e.message); });
     }
-  </script>
-
-  <script>
-    // iOS PWA: iframe 안에서 Notification.requestPermission() 무시됨
-    // fcm-push.js가 postMessage로 요청 → top에서 처리 → 결과 반환
-    window.addEventListener("message",function(e){
-      if(!e.data||e.data.type!=="fcm-request-permission")return;
-      if(!("Notification"in window))return;
-      Notification.requestPermission().then(function(p){
-        var f=document.getElementById("messengerFrame");
-        if(f&&f.contentWindow)f.contentWindow.postMessage({type:"fcm-permission-result",permission:p},"*");
-      });
-    });
   </script>
 </body>
 </html>
