@@ -288,3 +288,134 @@ case "social_upload_file": {
     return jsonResponse({ ok: false, error: String(e.message || e) });
   }
 }
+
+// ============================================================
+// [추가 패치] handleFcmPush_ — notify_mode 반영
+// ============================================================
+// 기존 handleFcmPush_ 함수를 아래 코드로 교체하세요.
+// 변경 내용:
+//   1) accessToken을 forEach 밖으로 이동 (매 토큰마다 재발급 방지)
+//   2) DB에서 토큰별 notify_mode 읽어 push data에 포함
+//      → SW(sw.js)가 수신자 모드에 맞게 진동/무음 처리
+// ============================================================
+
+function handleFcmPush_(e) {
+  try {
+    var p = {};
+    if (e && e.postData && e.postData.type &&
+        e.postData.type.indexOf("application/json") !== -1) {
+      try { p = JSON.parse(e.postData.contents || "{}"); } catch (_) {}
+    } else if (e && e.parameter) {
+      p = e.parameter;
+    }
+
+    var roomId    = String(p.room_id || "global");
+    var sender    = String(p.sender  || "누군가");
+    var body      = String(p.body    || "새 메시지가 있어요.");
+    var tokensRaw = String(p.tokens  || "");
+
+    if (!tokensRaw) return jsonResponse_({ ok: false, error: "no_tokens" });
+
+    var tokens = tokensRaw.split(",")
+      .map(function (t) { return t.trim(); })
+      .filter(Boolean);
+
+    if (tokens.length === 0) return jsonResponse_({ ok: false, error: "empty_tokens" });
+
+    var title       = "마이파이 - " + sender;
+
+    // ── [수정] accessToken을 forEach 밖으로 이동 (매 토큰마다 재발급 방지)
+    var accessToken = _getFcmAccessToken_();
+
+    // ── [추가] DB에서 토큰별 notify_mode 조회
+    //    /fcm_tokens/{userId}.notify_mode → "sound" | "vibrate" | "mute"
+    var dbTokenMap = {};  // { fcmToken: notifyMode }
+    try {
+      var dbResp = UrlFetchApp.fetch(FCM_DB_URL + "/fcm_tokens.json", {
+        method: "get",
+        headers: { "Authorization": "Bearer " + accessToken },
+        muteHttpExceptions: true
+      });
+      if (dbResp.getResponseCode() === 200) {
+        var allEntries = JSON.parse(dbResp.getContentText()) || {};
+        Object.keys(allEntries).forEach(function (key) {
+          var entry = allEntries[key];
+          if (entry && entry.token) {
+            dbTokenMap[entry.token] = entry.notify_mode || "sound";
+          }
+        });
+      }
+    } catch (dbErr) {
+      Logger.log("[FCM] DB notify_mode 조회 실패 (기본값 sound 사용): " + dbErr);
+    }
+
+    var results     = [];
+    var staleTokens = [];
+
+    tokens.forEach(function (token) {
+      try {
+        // ── [추가] 수신자별 알림 모드
+        var notifyMode = dbTokenMap[token] || "sound";
+        var isMute     = notifyMode === "mute";
+        var isVibrate  = notifyMode === "vibrate";
+
+        var payload = {
+          message: {
+            token: token,
+            notification: { title: title, body: body },
+            data: {
+              room_id:     roomId,
+              sender:      sender,
+              body:        body,
+              notify_mode: notifyMode   // ← SW가 이 값으로 진동/무음 결정
+            },
+            webpush: {
+              notification: {
+                icon:     "/images/icons/icon-192x192.png",
+                badge:    "/images/icons/icon-192x192.png",
+                tag:      "mypai-msg-" + roomId,
+                renotify: "true",
+                silent:   isMute ? "true" : "false",
+                vibrate:  isMute ? "[]" : (isVibrate ? "[200,100,200]" : "[200,100,200]")
+              },
+              fcm_options: { link: "/" }
+            }
+          }
+        };
+
+        var resp = UrlFetchApp.fetch(
+          "https://fcm.googleapis.com/v1/projects/" + FCM_PROJECT_ID + "/messages:send",
+          {
+            method:           "post",
+            contentType:      "application/json",
+            headers:          { "Authorization": "Bearer " + accessToken },
+            payload:          JSON.stringify(payload),
+            muteHttpExceptions: true
+          }
+        );
+
+        var status = resp.getResponseCode();
+        Logger.log("[FCM] token=..." + token.slice(-6) + " mode=" + notifyMode + " status=" + status);
+
+        if (status === 404 || status === 410) staleTokens.push(token);
+        results.push({ token: token.slice(-6), status: status });
+
+      } catch (err) {
+        results.push({ token: token.slice(-6), error: String(err) });
+      }
+    });
+
+    if (staleTokens.length > 0) _removeStaleTokensFromDb_(staleTokens);
+
+    return jsonResponse_({
+      ok:            true,
+      sent:          results.filter(function (r) { return r.status === 200; }).length,
+      stale_removed: staleTokens.length,
+      results:       results
+    });
+
+  } catch (err) {
+    Logger.log("[FCM] handleFcmPush_ 오류: " + err);
+    return jsonResponse_({ ok: false, error: String(err) });
+  }
+}
