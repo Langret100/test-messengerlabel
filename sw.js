@@ -174,8 +174,31 @@ self.addEventListener("push", function (e) {
       };
 
       return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clients) {
+        /* ── isForeground 판단 ─────────────────────────────────────
+           iOS Safari PWA는 앱을 홈으로 내려도 clients.visibilityState가
+           "visible" 로 남는 버그가 있음 → 알림이 안 뜨는 문제 발생.
+
+           해결: visibilityState === "visible" 단독 판단 대신,
+             1) focused 상태인 클라이언트가 있거나
+             2) visibilityState가 "visible" 이면서 클라이언트가 1개만 있을 때는
+                URL에 social-messenger.html 이 포함된 경우에만 포그라운드로 인정.
+             → 실제로 사용자가 화면을 보고 있을 때만 알림 억제.
+
+           더 단순한 실용적 접근:
+             clients 길이가 0 이면 무조건 알림 표시.
+             clients 가 있어도 모두 visibilityState !== "visible" 이면 알림 표시.
+             focused 클라이언트가 있으면 포그라운드로 판단.
+        ─────────────────────────────────────────────────────────── */
         var isForeground = clients.some(function (c) {
-          return c.visibilityState === "visible";
+          // focused 우선 — iOS 포함 모든 환경에서 신뢰할 수 있는 값
+          if (c.focused) return true;
+          // visibilityState가 visible이고 URL이 메신저 페이지인 경우만 인정
+          // (iOS PWA 백그라운드 오탐 방지)
+          if (c.visibilityState === "visible" &&
+              c.url && c.url.indexOf("social-messenger.html") !== -1) {
+            return true;
+          }
+          return false;
         });
 
         var tasks = [];
