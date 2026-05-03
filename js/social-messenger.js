@@ -1833,32 +1833,18 @@ onPickImage: async function () {
           getNotifyLabel: function () { return NotifySetting.getMenuLabel(); },
           onToggleNotify: function () { NotifySetting.toggle(showStatus); },
           onLogout: function () {
-            // iframe 내부 → 부모(index.html)로 로그아웃 요청
-            try {
-              // 1) 같은 출처라면 부모 전역 함수 직접 호출
-              if (window.parent && typeof window.parent.logoutGhostUser === "function") {
-                window.parent.logoutGhostUser();
-              }
-              if (window.parent && typeof window.parent.openLoginPanel === "function") {
-                // 로그아웃 후 바로 로그인창 띄우기
-                window.parent.openLoginPanel();
-              }
-            } catch (e) {}
-
-            // 2) postMessage fallback (file:// 등 환경)
-            try {
-              if (window.parent && window.parent.postMessage) {
-                window.parent.postMessage({ type: "WG_LOGOUT" }, "*");
-              }
-            } catch (e2) {}
-
-            // 3) 현재 iframe 상태도 즉시 잠그기
-            try {
-              localStorage.removeItem("ghostUser");
-            } catch (e3) {}
+            try { localStorage.removeItem("ghostUser"); } catch (e) {}
+            window.currentUser = null;
+            window.__loginConfirmed = false;
             myId = null;
             myNickname = null;
             showStatus("로그아웃 되었어요.");
+            // 로그인창 띄우기
+            try {
+              if (typeof window.openLoginPanel === "function") {
+                window.openLoginPanel();
+              }
+            } catch (e2) {}
           }
         });
     }
@@ -2364,12 +2350,14 @@ attachEvents();
         /* ── 발송 대상 토큰 필터링 ───────────────────────────
            tokenSnap 전체를 순회하며 제외 조건을 하나씩 체크.
         ─────────────────────────────────────────────────────── */
+        console.log("[FCM] 발신자 myId:", myId);
         var tokens = [];
         tokenSnap.forEach(function (child) {
           var v = child.val() || {};
-          if (!v.token) return; // 토큰 없는 항목 스킵
+          if (!v.token) return;
 
           // 제외 조건 1: 발신자 본인 토큰 제외
+          console.log("[FCM] 토큰 user_id:", v.user_id, "| myId:", myId, "| 같음:", String(v.user_id) === String(myId), "| rooms:", v.rooms);
           if (v.user_id && myId && String(v.user_id) === String(myId)) return;
 
           // 제외 조건 2: 현재 이 방을 열고 있는 유저 제외
