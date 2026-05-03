@@ -396,7 +396,13 @@
     }
     // iframe 안에서는 messenger-only.js가 SW 메시지를 window.postMessage로 relay해줌
     window.addEventListener("message", function (ev) {
-      _handleSwMessage(ev.data);
+      try {
+        var d = ev && ev.data;
+        if (!d || typeof d !== "object") return;
+        // FCM 관련 타입만 처리, 나머지는 무시
+        if (d.type !== "FCM_PUSH_RECEIVED" && d.type !== "FCM_OPEN_ROOM") return;
+        _handleSwMessage(d);
+      } catch (e) {}
     });
   }
 
