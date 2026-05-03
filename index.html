@@ -103,14 +103,6 @@
   <script src="js/fcm-push.js"></script>
   <script src="js/pwa-manager.js"></script>
 
-  <script>
-    // Service Worker 등록 (현재 페이지 경로를 기준으로 scope 자동 계산)
-    if ("serviceWorker" in navigator) {
-      var swScope = new URL("./", location.href).pathname;
-      navigator.serviceWorker.register("sw.js", { scope: swScope })
-        .then(function (reg) { console.log("[PWA] SW 등록:", reg.scope); })
-        .catch(function (e) { console.warn("[PWA] SW 등록 실패:", e.message); });
-    }
-  </script>
+  <!-- SW 등록은 pwa-manager.js의 registerSW()가 담당 -->
 </body>
 </html>

@@ -64,7 +64,7 @@ function _saveBadgeCount(n) {
   } catch(e) {}
 }
 
-var CACHE_NAME = "mypai-v12";
+var CACHE_NAME = "mypai-v14";
 var CACHE_URLS = [
   "./games/social-messenger.html",
   "./js/config.js",

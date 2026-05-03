@@ -10,7 +10,12 @@
 (function () {
   if (window.PwaManager) return;
 
-  var SW_PATH = "../sw.js";
+  // sw.js는 index.html과 같은 디렉토리에 있으므로 index.html 위치 기준으로 계산
+  var SW_PATH = (function() {
+    // location.pathname에서 현재 디렉토리 추출 후 sw.js 조합
+    var dir = location.pathname.replace(/\/[^\/]*$/, '/');
+    return dir + 'sw.js';
+  })();
   var LS_UNREAD = "ghostUnreadCounts_v1";  // { roomId: count }
   var swReg = null;
   var deferredPrompt = null; // beforeinstallprompt 이벤트
@@ -21,21 +26,22 @@
    */
   function registerSW() {
     if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+    // 현재 페이지 기준 정확한 SW URL과 scope 계산
+    var swBase   = new URL(SW_PATH, location.href).href;  // 절대 URL
+    var swScope  = location.pathname.replace(/\/[^\/]*$/, '/'); // 현재 디렉토리
     return navigator.serviceWorker.getRegistrations().then(function (regs) {
       for (var i = 0; i < regs.length; i++) {
-        var r = regs[i];
+        var r  = regs[i];
         var sw = r.active || r.installing || r.waiting;
-        if (sw && sw.scriptURL && sw.scriptURL.indexOf("sw.js") > -1) {
+        // scriptURL이 현재 사이트의 sw.js와 정확히 일치하는 경우만 재사용
+        if (sw && sw.scriptURL === swBase) {
           swReg = r;
           console.log("[PWA] 기존 SW 재사용:", sw.scriptURL);
           return r;
         }
       }
-      // 기존 SW 없으면 등록 시도
-      var _swScope = (function() {
-        try { return new URL("../", location.href).pathname; } catch(e) { return "/"; }
-      })();
-      return navigator.serviceWorker.register(SW_PATH, { scope: _swScope })
+      // 일치하는 SW 없으면 신규 등록
+      return navigator.serviceWorker.register(SW_PATH, { scope: swScope })
         .then(function (reg) {
           swReg = reg;
           console.log("[PWA] SW 신규 등록:", reg.scope);
