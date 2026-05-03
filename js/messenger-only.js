@@ -123,6 +123,16 @@
     setCurrentUserFromStorage();
     openMessenger(false);
 
+    // 이미 로그인된 상태로 앱 시작 시 FCM 토큰 초기화
+    // (ghost:login-complete 이벤트는 로그인 시에만 발생하므로 별도 처리 필요)
+    setTimeout(function () {
+      try {
+        var u = safeParseUser();
+        if (u && u.user_id && window.FcmPush && typeof window.FcmPush.init === 'function') {
+          window.FcmPush.init(String(u.user_id));
+        }
+      } catch (e) {}
+    }, 1500); // Firebase SDK 로드 완료 대기
 
     // 비로그인 상태라면, 로그인 패널을 확실히 띄움(로드 순서/브라우저 차이 대비)
     setTimeout(function () {
