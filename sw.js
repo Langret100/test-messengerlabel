@@ -41,10 +41,12 @@ _fbMessaging && _fbMessaging.onBackgroundMessage(function(payload) {
   self.registration.showNotification(title, {
     body:     body,
     badge:    badge,
+    // icon 미지정 → 상태바 작은 아이콘(badge)만 표시, 우측 큰 아이콘 없음
     tag:      "mypai-msg-" + (roomId || "global"),
     renotify: true,
     silent:   isMute,
-    vibrate:  isMute ? [] : (isVib ? [300,100,300,100,300] : [200,100,200]),
+    // sound 모드: 진동 없음(소리만), vibrate 모드: 진동만, mute: 둘 다 없음
+    vibrate:  isMute ? [] : (isVib ? [300,100,300,100,300] : []),
     data:     { roomId: roomId, url: appUrl, notifyMode: notifyMode }
   });
 });
@@ -181,13 +183,13 @@ self.addEventListener("push", function (e) {
 
       var opts = {
         body:     body,
-        icon:     icon,
+        // icon 미지정 → 우측 큰 아이콘 없음 (badge만 상태바에 표시)
         badge:    badge,
         tag:      tag,
         renotify: true,
         silent:   isMute,
-        vibrate:  (isMute ? [] : [200, 100, 200]),
-        /* URL 노출 방지: data에만 보관, 알림 본문에는 미포함 */
+        // sound: 진동 없음(시스템 소리만), vibrate: 진동만, mute: 둘 다 없음
+        vibrate:  isMute ? [] : (notifyMode === "vibrate" ? [200, 100, 200] : []),
         data:     { roomId: roomId, url: appUrl, notifyMode: notifyMode }
       };
 

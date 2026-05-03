@@ -363,6 +363,13 @@
       } catch (e) {}
     });
 
+    // 앱이 백그라운드에서 포그라운드로 복귀할 때 배지 재동기화
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        _applyBadge();
+      }
+    });
+
     // SW로부터 FCM 푸시 수신 알림 (백그라운드 → 포그라운드 복귀 시)
     if (navigator.serviceWorker) {
       navigator.serviceWorker.addEventListener("message", function (ev) {
@@ -375,10 +382,10 @@
             counts[d.roomId] = (counts[d.roomId] || 0) + 1;
             saveUnreadCounts(counts);
             _updateRoomBadgeUI(d.roomId, counts[d.roomId]);
-            // SW의 IndexedDB 카운트를 pwa-manager localStorage 합계로 덮어써서 동기화
-            var total = getTotalUnread();
-            _postToSW({ type: "SET_BADGE", count: total });
+            // 배지 API + SW 동기화 (누락되어 있던 핵심 호출)
+            _applyBadge();
             try {
+              var total = getTotalUnread();
               document.title = total > 0 ? ("(" + total + ") 마이메신저") : "마이메신저";
             } catch (et) {}
           }

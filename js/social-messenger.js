@@ -136,10 +136,7 @@ menu.appendChild(makeItem("🔎 QR 링크 스캔", function () { menu._fire && m
 menu.appendChild(makeItem("🖼️ 이미지 첨부", function () { menu._fire && menu._fire("pickImage"); }));
 menu.appendChild(makeItem("📎 파일 첨부", function () { menu._fire && menu._fire("pickFile"); }));
 
-// 알림 설정(켜짐/꺼짐 표시)
-var notifyBtn = makeItem("", function () { menu._fire && menu._fire("toggleNotify"); });
-menu._notifyBtn = notifyBtn;
-menu.appendChild(notifyBtn);
+// 알림 설정은 프로필 설정창에 있으므로 + 버튼 메뉴에서 제거
 
     // 로그아웃(요청: + 메뉴에 추가)
     menu.appendChild(makeItem("🚪 로그아웃", function () { menu._fire && menu._fire("logout"); }));
@@ -166,9 +163,6 @@ menu.appendChild(notifyBtn);
       menu.setAttribute("aria-hidden", "true");
     }
     function openMenu() {
-      if (menu._notifyBtn && typeof options.getNotifyLabel === "function") {
-        menu._notifyBtn.textContent = options.getNotifyLabel();
-      }
       menu.classList.add("open");
       menu.setAttribute("aria-hidden", "false");
     }
@@ -1839,9 +1833,11 @@ onPickImage: async function () {
             myId = null;
             myNickname = null;
             showStatus("로그아웃 되었어요.");
-            // 로그인창 띄우기
+            // iframe 내부 → 부모(index.html)로 로그아웃 신호 전송 (웹앱 로그아웃 작동)
             try {
-              if (typeof window.openLoginPanel === "function") {
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: "WG_LOGOUT" }, "*");
+              } else if (typeof window.openLoginPanel === "function") {
                 window.openLoginPanel();
               }
             } catch (e2) {}
