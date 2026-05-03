@@ -279,8 +279,15 @@
       "<input id='pmBgInput' type='file' accept='image/*' style='display:none'></div>",
       "<button id='pmSave' type='button' style='border:0;background:#2563eb;color:#fff;border-radius:12px;height:40px;font-size:14px;font-weight:800;cursor:pointer;'>저장</button>",
       "<div id='pmStatus' style='font-size:12px;color:#6b7280;text-align:center;min-height:16px;'></div>",
-      /* 알림 통합 버튼 (앱 내 소리 + FCM 푸시 알림 한번에) */
-      "<button id='pmNotifyBtn' type='button' style='width:100%;border:1px solid #f59e0b;background:#fffbeb;color:#b45309;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:6px;'>🔔 알림 허용</button>",
+      /* 알림 켜기/끄기 + 모드(소리/진동/무음) 통합 */
+      "<div id='pmNotifySection' style='display:flex;flex-direction:column;gap:7px;'>",
+      "<button id='pmNotifyBtn' type='button' style='width:100%;border:1px solid #f59e0b;background:#fffbeb;color:#b45309;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;'>🔔 알림 허용</button>",
+      "<div id='pmNotifyModeRow' style='display:none;flex-direction:row;gap:6px;'>",
+      "  <button id='pmModeSound'   type='button' data-mode='sound'   style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>🔔 소리</button>",
+      "  <button id='pmModeVibrate' type='button' data-mode='vibrate' style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>📳 진동</button>",
+      "  <button id='pmModeMute'    type='button' data-mode='mute'    style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>🔕 무음</button>",
+      "</div>",
+      "</div>",
       /* 하단 버튼 행: 웹앱 추가 + 로그아웃 */
       "<div style='display:flex;gap:8px;'>",
       "  <button id='pwaInstallBtn' type='button' style='flex:1;border:1px solid #16a34a;background:#f0fdf4;color:#16a34a;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;'>📱 바탕화면에 추가</button>",
@@ -495,10 +502,11 @@
       });
     }
 
-    /* 알림 통합 버튼 — localStorage 직접 제어 (NotifySetting은 iframe 안이라 접근 불가) */
+    /* 알림 켜기/끄기 + 모드 선택 통합 */
     var notifyBtn = document.getElementById("pmNotifyBtn");
     if (notifyBtn) {
-      var NOTIFY_KEY = "mypai_notify_enabled";
+      var NOTIFY_KEY  = "mypai_notify_enabled";
+      var MODE_KEY_PM = "mypai_notify_mode_v2";
 
       function isNotifyOn() {
         try { return localStorage.getItem(NOTIFY_KEY) !== "0"; } catch(e) { return true; }
@@ -506,92 +514,131 @@
       function setNotifyOn(v) {
         try { localStorage.setItem(NOTIFY_KEY, v ? "1" : "0"); } catch(e) {}
       }
+      function getNotifyMode() {
+        try {
+          var m = localStorage.getItem(MODE_KEY_PM);
+          if (m === "vibrate" || m === "mute" || m === "sound") return m;
+        } catch(e) {}
+        return "sound";
+      }
+      function setNotifyMode(m) {
+        try { localStorage.setItem(MODE_KEY_PM, m); } catch(e) {}
+      }
 
-      // file:// 환경 감지 (로컬 실행 시 Notification API 동작 불가)
       var isFileProtocol = (location.protocol === "file:");
+      var modeRow = document.getElementById("pmNotifyModeRow");
+
+      function refreshModeButtons() {
+        if (!modeRow) return;
+        var cur = getNotifyMode();
+        ["pmModeSound","pmModeVibrate","pmModeMute"].forEach(function(btnId) {
+          var b = document.getElementById(btnId);
+          if (!b) return;
+          var isActive = b.getAttribute("data-mode") === cur;
+          b.style.background  = isActive ? "#eff6ff" : "#f9fafb";
+          b.style.borderColor = isActive ? "#3b82f6" : "#d1d5db";
+          b.style.color       = isActive ? "#1d4ed8" : "#374151";
+          b.style.fontWeight  = isActive ? "800"     : "700";
+        });
+      }
 
       function refreshNotifyBtn() {
         if (!("Notification" in window)) {
           notifyBtn.textContent = "🔕 알림 미지원 브라우저";
-          notifyBtn.disabled = true; notifyBtn.style.opacity = "0.5"; return;
+          notifyBtn.disabled = true; notifyBtn.style.opacity = "0.5";
+          if (modeRow) modeRow.style.display = "none";
+          return;
         }
-        // file:// 환경에서는 권한 요청 불가 — 앱 내 소리 알림(ON/OFF)만 제공
         if (isFileProtocol) {
           var on = isNotifyOn();
           notifyBtn.disabled = false; notifyBtn.style.opacity = "1";
           if (on) {
-            notifyBtn.textContent = "🔔 앱 알림음 켜짐 (탭하면 끄기)";
-            notifyBtn.style.background = "#f0fdf4";
-            notifyBtn.style.borderColor = "#16a34a";
-            notifyBtn.style.color = "#16a34a";
+            notifyBtn.textContent = "🔔 알림 켜짐 (탭하면 끄기)";
+            notifyBtn.style.background = "#f0fdf4"; notifyBtn.style.borderColor = "#16a34a"; notifyBtn.style.color = "#16a34a";
+            if (modeRow) { modeRow.style.display = "flex"; refreshModeButtons(); }
           } else {
-            notifyBtn.textContent = "🔕 앱 알림음 꺼짐 (탭하면 켜기)";
-            notifyBtn.style.background = "#f1f5f9";
-            notifyBtn.style.borderColor = "#94a3b8";
-            notifyBtn.style.color = "#64748b";
+            notifyBtn.textContent = "🔕 알림 꺼짐 (탭하면 켜기)";
+            notifyBtn.style.background = "#f1f5f9"; notifyBtn.style.borderColor = "#94a3b8"; notifyBtn.style.color = "#64748b";
+            if (modeRow) modeRow.style.display = "none";
           }
           return;
         }
         var perm = Notification.permission;
         var on = isNotifyOn();
         notifyBtn.disabled = false; notifyBtn.style.opacity = "1";
-
         if (perm === "denied") {
           notifyBtn.textContent = "🔕 알림 차단됨 — 브라우저 설정에서 허용";
           notifyBtn.disabled = true; notifyBtn.style.opacity = "0.6";
+          if (modeRow) modeRow.style.display = "none";
         } else if (perm === "granted" && on) {
           notifyBtn.textContent = "🔔 알림 켜짐 (탭하면 끄기)";
-          notifyBtn.style.background = "#f0fdf4";
-          notifyBtn.style.borderColor = "#16a34a";
-          notifyBtn.style.color = "#16a34a";
+          notifyBtn.style.background = "#f0fdf4"; notifyBtn.style.borderColor = "#16a34a"; notifyBtn.style.color = "#16a34a";
+          if (modeRow) { modeRow.style.display = "flex"; refreshModeButtons(); }
         } else if (perm === "granted" && !on) {
           notifyBtn.textContent = "🔕 알림 꺼짐 (탭하면 켜기)";
-          notifyBtn.style.background = "#f1f5f9";
-          notifyBtn.style.borderColor = "#94a3b8";
-          notifyBtn.style.color = "#64748b";
+          notifyBtn.style.background = "#f1f5f9"; notifyBtn.style.borderColor = "#94a3b8"; notifyBtn.style.color = "#64748b";
+          if (modeRow) modeRow.style.display = "none";
         } else {
-          notifyBtn.textContent = "🔔 알림 허용";
-          notifyBtn.style.background = "#fffbeb";
-          notifyBtn.style.borderColor = "#f59e0b";
-          notifyBtn.style.color = "#b45309";
+          if (!localStorage.getItem(MODE_KEY_PM)) setNotifyMode("sound");
+          notifyBtn.textContent = "🔔 알림 허용 (탭하면 켜기)";
+          notifyBtn.style.background = "#fffbeb"; notifyBtn.style.borderColor = "#f59e0b"; notifyBtn.style.color = "#b45309";
+          if (modeRow) modeRow.style.display = "none";
         }
       }
       refreshNotifyBtn();
 
       notifyBtn.addEventListener("click", function () {
-        // file:// 환경: 앱 내 알림음만 토글
         if (isFileProtocol) {
           var next = !isNotifyOn();
           setNotifyOn(next);
+          if (next && !localStorage.getItem(MODE_KEY_PM)) setNotifyMode("sound");
           refreshNotifyBtn();
           return;
         }
-
         var perm = ("Notification" in window) ? Notification.permission : "unsupported";
-
         if (perm === "granted") {
-          // 켜짐/꺼짐 토글
           var next = !isNotifyOn();
           setNotifyOn(next);
-          if (next && window.FcmPush && typeof window.FcmPush.init === "function") {
-            window.FcmPush.init();
+          if (next) {
+            if (!localStorage.getItem(MODE_KEY_PM)) setNotifyMode("sound");
+            if (window.FcmPush && typeof window.FcmPush.init === "function") window.FcmPush.init();
           }
           refreshNotifyBtn();
           return;
         }
-
         if (perm === "default") {
           Notification.requestPermission().then(function (result) {
             if (result === "granted") {
               setNotifyOn(true);
-              if (window.FcmPush && typeof window.FcmPush.init === "function") {
-                window.FcmPush.init();
-              }
+              if (!localStorage.getItem(MODE_KEY_PM)) setNotifyMode("sound");
+              if (window.FcmPush && typeof window.FcmPush.init === "function") window.FcmPush.init();
             }
             refreshNotifyBtn();
           });
         }
       });
+
+      if (modeRow) {
+        modeRow.addEventListener("click", function(e) {
+          /* closest() 폴리필 없이 data-mode 탐색 (구형 Android 대응) */
+          var t = e.target;
+          while (t && t !== modeRow) {
+            if (t.getAttribute && t.getAttribute("data-mode")) break;
+            t = t.parentElement;
+          }
+          var btn = (t && t !== modeRow && t.getAttribute && t.getAttribute("data-mode")) ? t : null;
+          if (!btn) return;
+          var mode = btn.getAttribute("data-mode");
+          setNotifyMode(mode);
+          refreshModeButtons();
+          try {
+            if (window.FcmPush && typeof window.FcmPush.refreshRooms === "function") window.FcmPush.refreshRooms();
+          } catch(ex) {}
+          try {
+            if (window._notifyMenuBtn) window._notifyMenuBtn.textContent = mode === "sound" ? "🔔 알람소리" : mode === "vibrate" ? "📳 진동" : "🔕 무음";
+          } catch(ex) {}
+        });
+      }
     }
 
     /* 로그아웃 버튼 */

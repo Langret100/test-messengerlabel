@@ -214,12 +214,15 @@
     var counts = getUnreadCounts();
     delete counts[roomId];
     saveUnreadCounts(counts);
+    var total = getTotalUnread();
     _applyBadge();
     _updateRoomBadgeUI(roomId, 0);
-    // 모든 방 읽었으면 SW 배지도 완전 초기화
-    if (getTotalUnread() === 0) {
+    // SW IndexedDB 카운트를 항상 localStorage 합계로 동기화 (부분 읽기 포함)
+    if (total === 0) {
       _postToSW({ type: "CLEAR_BADGE" });
       try { if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) {}
+    } else {
+      _postToSW({ type: "SET_BADGE", count: total });
     }
   }
 
@@ -367,15 +370,15 @@
           var d = ev && ev.data;
           if (!d) return;
           if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
-            // SW가 이미 setAppBadge를 처리했으므로
-            // localStorage만 갱신하고 SW에 중복 SET_BADGE 보내지 않음
+            // localStorage 갱신 (pwa-manager가 단일 소스)
             var counts = getUnreadCounts();
             counts[d.roomId] = (counts[d.roomId] || 0) + 1;
             saveUnreadCounts(counts);
             _updateRoomBadgeUI(d.roomId, counts[d.roomId]);
-            // 타이틀만 갱신
+            // SW의 IndexedDB 카운트를 pwa-manager localStorage 합계로 덮어써서 동기화
+            var total = getTotalUnread();
+            _postToSW({ type: "SET_BADGE", count: total });
             try {
-              var total = getTotalUnread();
               document.title = total > 0 ? ("(" + total + ") 마이메신저") : "마이메신저";
             } catch (et) {}
           }
