@@ -306,29 +306,8 @@
         _applyBadge();
         // FCM 토큰 초기화 (login.js가 없는 환경 대응)
         // ghostUser가 아직 안 세팅됐을 수 있으므로 3회 재시도
-        var _fcmTries = 0;
-        function _tryFcmInit() {
-          _fcmTries++;
-          try {
-            var userId = "";
-            try {
-              if (window.currentUser && window.currentUser.user_id) {
-                userId = String(window.currentUser.user_id);
-              } else {
-                var raw = localStorage.getItem("ghostUser");
-                if (raw) { var u = JSON.parse(raw); if (u && u.user_id) userId = String(u.user_id); }
-              }
-            } catch (e) {}
-
-            if (userId && window.FcmPush && typeof window.FcmPush.init === "function") {
-              window.FcmPush.init(userId);
-              return; // 성공 시 재시도 중단
-            }
-          } catch (e) {}
-          // userId 없으면 최대 3회, 2초 간격 재시도
-          if (_fcmTries < 3) setTimeout(_tryFcmInit, 2000);
-        }
-        setTimeout(_tryFcmInit, 500);
+        // FcmPush.init()은 ghost:login-complete 이벤트(fcm-push.js)가 처리함
+        // pwa-manager에서 중복 호출하면 토큰 저장이 2번 일어나므로 제거
       }, 1000);
     });
 

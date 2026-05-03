@@ -298,13 +298,13 @@
         requestToken()
           .then(function (newToken) {
             if (newToken && newToken !== cached) {
-              // 토큰이 바뀐 경우에만 DB 업데이트 (불필요한 write 방지)
+              // 토큰이 실제로 바뀐 경우에만 DB 업데이트
               console.log('[FCM] 토큰 갱신 감지 → DB 업데이트');
+              _token = newToken;
               saveTokenToDb(newToken, _userId);
             }
           })
           .catch(function (e) {
-            // 갱신 실패해도 기존 캐시 토큰으로 계속 동작 (무중단)
             console.warn('[FCM] 백그라운드 토큰 갱신 실패:', e.message || e);
           });
       }
