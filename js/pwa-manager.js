@@ -242,6 +242,23 @@
     } catch (e) {}
   }
 
+  /* SW / relay 메시지 공통 처리 */
+  function _handleSwMessage(d) {
+    try {
+      if (!d) return;
+      if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
+        var counts = getUnreadCounts();
+        counts[d.roomId] = (counts[d.roomId] || 0) + 1;
+        saveUnreadCounts(counts);
+        _updateRoomBadgeUI(d.roomId, counts[d.roomId]);
+        _applyBadge();
+      }
+      if (d.type === "FCM_OPEN_ROOM" && d.roomId) {
+        window.dispatchEvent(new CustomEvent("ghost:open-room", { detail: { roomId: d.roomId } }));
+      }
+    } catch (e) {}
+  }
+
   /* 앱 배지 실제 적용 */
   function _applyBadge() {
     var total = getTotalUnread();
@@ -371,31 +388,16 @@
     });
 
     // SW로부터 FCM 푸시 수신 알림 (백그라운드 → 포그라운드 복귀 시)
+    // 직접 SW 메시지 (최상위 페이지에서 실행될 때)
     if (navigator.serviceWorker) {
       navigator.serviceWorker.addEventListener("message", function (ev) {
-        try {
-          var d = ev && ev.data;
-          if (!d) return;
-          if (d.type === "FCM_PUSH_RECEIVED" && d.roomId) {
-            // localStorage 갱신 (pwa-manager가 단일 소스)
-            var counts = getUnreadCounts();
-            counts[d.roomId] = (counts[d.roomId] || 0) + 1;
-            saveUnreadCounts(counts);
-            _updateRoomBadgeUI(d.roomId, counts[d.roomId]);
-            // 배지 API + SW 동기화 (누락되어 있던 핵심 호출)
-            _applyBadge();
-            try {
-              var total = getTotalUnread();
-              document.title = total > 0 ? ("(" + total + ") 마이메신저") : "마이메신저";
-            } catch (et) {}
-          }
-          if (d.type === "FCM_OPEN_ROOM" && d.roomId) {
-            // 알림 클릭 → 방 이동 (social-messenger.js의 핸들러와 중복이지만 안전)
-            window.dispatchEvent(new CustomEvent("ghost:open-room", { detail: { roomId: d.roomId } }));
-          }
-        } catch (e) {}
+        _handleSwMessage(ev.data);
       });
     }
+    // iframe 안에서는 messenger-only.js가 SW 메시지를 window.postMessage로 relay해줌
+    window.addEventListener("message", function (ev) {
+      _handleSwMessage(ev.data);
+    });
   }
 
   window.PwaManager = {

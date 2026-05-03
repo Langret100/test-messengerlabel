@@ -22,34 +22,9 @@ try {
   console.warn('[SW] Firebase 초기화 실패 (배포 환경에서는 자동 치환됨):', e.message || e);
 }
 
-// 백그라운드 FCM 수신: onBackgroundMessage 활성화
-// SDK가 push 이벤트를 가로채므로, 반드시 여기서 처리해야 백그라운드 알림이 울림
-_fbMessaging && _fbMessaging.onBackgroundMessage(function(payload) {
-  var data       = payload.data || {};
-  var notif      = payload.notification || {};
-  var title      = notif.title || data.title || "마이파이";
-  var body       = notif.body  || data.body  || "새 메시지가 있어요.";
-  var roomId     = data.room_id || "";
-  var notifyMode = data.notify_mode || "sound";
-  var isMute     = notifyMode === "mute";
-  var isVib      = notifyMode === "vibrate";
-
-  var scope  = self.registration.scope;
-  var badge  = scope + "images/icons/favicon-32x32.png";
-  var appUrl = scope + "games/social-messenger.html";
-
-  self.registration.showNotification(title, {
-    body:     body,
-    icon:     scope + "images/icons/icon-192x192.png",
-    badge:    badge,
-    tag:      "mypai-msg-" + (roomId || "global"),
-    renotify: true,
-    silent:   isMute,
-    // sound 모드: 진동 없음(소리만), vibrate 모드: 진동만, mute: 둘 다 없음
-    vibrate:  isMute ? [] : (isVib ? [300,100,300,100,300] : []),
-    data:     { roomId: roomId, url: appUrl, notifyMode: notifyMode }
-  });
-});
+// Firebase SDK가 push 이벤트를 가로채지 않도록 빈 핸들러 등록
+// 실제 알림/배지 처리는 아래 push 이벤트에서 통합 처리
+_fbMessaging && _fbMessaging.onBackgroundMessage(function() {});
 
 /* ============================================================
    [sw.js] Service Worker - 마이파이 PWA
