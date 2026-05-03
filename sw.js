@@ -144,7 +144,7 @@ self.addEventListener("push", function (e) {
   var scope  = self.registration.scope;
   var icon   = scope + "images/icons/icon-192x192.png";
   var badge  = scope + "images/icons/favicon-32x32.png";  /* 상태바 흑백 아이콘 */
-  var tag    = "mypai-msg-" + (roomId || "global");
+  var tag    = "mypai-msg-" + (roomId || "global") + "-" + Date.now();
 
   var appUrl  = scope + "games/social-messenger.html";
 
