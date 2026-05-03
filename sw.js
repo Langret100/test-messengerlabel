@@ -40,8 +40,8 @@ _fbMessaging && _fbMessaging.onBackgroundMessage(function(payload) {
 
   self.registration.showNotification(title, {
     body:     body,
+    icon:     scope + "images/icons/icon-192x192.png",
     badge:    badge,
-    // icon 미지정 → 상태바 작은 아이콘(badge)만 표시, 우측 큰 아이콘 없음
     tag:      "mypai-msg-" + (roomId || "global"),
     renotify: true,
     silent:   isMute,
@@ -183,7 +183,7 @@ self.addEventListener("push", function (e) {
 
       var opts = {
         body:     body,
-        // icon 미지정 → 우측 큰 아이콘 없음 (badge만 상태바에 표시)
+        icon:     icon,
         badge:    badge,
         tag:      tag,
         renotify: true,

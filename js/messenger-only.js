@@ -135,6 +135,23 @@
 
     window.addEventListener("message", onMessage);
 
+    // SW 메시지 → iframe 브릿지
+    // SW(sw.js)가 보내는 FCM_PUSH_RECEIVED / FCM_OPEN_ROOM 메시지는
+    // 최상위 페이지(index.html)로만 전달되므로, iframe 안의 pwa-manager에 relay 필요
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", function (ev) {
+        try {
+          var d = ev && ev.data;
+          if (!d) return;
+          if (d.type === "FCM_PUSH_RECEIVED" || d.type === "FCM_OPEN_ROOM") {
+            if (frame && frame.contentWindow) {
+              frame.contentWindow.postMessage(d, "*");
+            }
+          }
+        } catch (e) {}
+      });
+    }
+
     if (reopenBtn) {
       reopenBtn.addEventListener("click", function () {
         openMessenger(true);

@@ -283,7 +283,7 @@
       "<div id='pmNotifySection' style='display:flex;flex-direction:column;gap:7px;'>",
       "<button id='pmNotifyBtn' type='button' style='width:100%;border:1px solid #f59e0b;background:#fffbeb;color:#b45309;border-radius:12px;height:38px;font-size:13px;font-weight:700;cursor:pointer;'>🔔 알림 허용</button>",
       "<div id='pmNotifyModeRow' style='display:none;flex-direction:row;gap:6px;'>",
-      "  <button id='pmModeSound'   type='button' data-mode='sound'   style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>🔔 소리</button>",
+      "  <button id='pmModeSound'   type='button' data-mode='sound'   style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>🔔 기본</button>",
       "  <button id='pmModeVibrate' type='button' data-mode='vibrate' style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>📳 진동</button>",
       "  <button id='pmModeMute'    type='button' data-mode='mute'    style='flex:1;border:1px solid #d1d5db;background:#f9fafb;color:#374151;border-radius:10px;height:34px;font-size:12px;font-weight:700;cursor:pointer;'>🔕 무음</button>",
       "</div>",
@@ -635,7 +635,7 @@
             if (window.FcmPush && typeof window.FcmPush.refreshRooms === "function") window.FcmPush.refreshRooms();
           } catch(ex) {}
           try {
-            if (window._notifyMenuBtn) window._notifyMenuBtn.textContent = mode === "sound" ? "🔔 알람소리" : mode === "vibrate" ? "📳 진동" : "🔕 무음";
+            if (window._notifyMenuBtn) window._notifyMenuBtn.textContent = mode === "sound" ? "🔔 시스템 기본" : mode === "vibrate" ? "📳 진동" : "🔕 무음";
           } catch(ex) {}
         });
       }

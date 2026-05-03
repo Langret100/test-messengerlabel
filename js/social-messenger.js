@@ -356,7 +356,7 @@ var NotifySetting = (function () {
     var mode = getMode();
     var perm = getPermission();
     var denied = (perm === "denied" || perm === "unsupported");
-    if (mode === "sound")   return denied ? "🔔 알람소리(차단됨)" : "🔔 알람소리";
+    if (mode === "sound")   return denied ? "🔔 시스템 기본(차단됨)" : "🔔 시스템 기본";
     if (mode === "vibrate") return "📳 진동";
     return "🔕 무음";
   }
@@ -389,7 +389,7 @@ var NotifySetting = (function () {
 
     var current = getMode();
     var items = [
-      { mode: "sound",   icon: "🔔", label: "알람소리",    desc: "소리 + 진동" },
+      { mode: "sound",   icon: "🔔", label: "시스템 기본",  desc: "소리/진동은 폰 설정을 따라요" },
       { mode: "vibrate", icon: "📳", label: "진동",        desc: "진동만 (무음)" },
       { mode: "mute",    icon: "🔕", label: "무음",        desc: "배지만 표시" }
     ];
@@ -449,11 +449,11 @@ var NotifySetting = (function () {
         if (perm === "default") {
           showStatus && showStatus("백그라운드 알림을 쓰려면 권한이 필요해요.");
           requestPermission().then(function (p) {
-            if (p === "granted") showStatus && showStatus("🔔 알람소리로 설정됐어요.");
+            if (p === "granted") showStatus && showStatus("🔔 시스템 기본으로 설정됐어요.");
             else if (p === "denied") showStatus && showStatus("브라우저에서 알림을 허용해 주세요.");
           });
         } else {
-          showStatus && showStatus("🔔 알람소리로 설정됐어요.");
+          showStatus && showStatus("🔔 시스템 기본으로 설정됐어요.");
         }
       } else if (mode === "vibrate") {
         showStatus && showStatus("📳 진동으로 설정됐어요.");

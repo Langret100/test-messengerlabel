@@ -372,11 +372,11 @@ function handleFcmPush_(e) {
             webpush: {
               notification: {
                 icon:     "/images/icons/icon-192x192.png",
-                badge:    "/images/icons/icon-192x192.png",
+                badge:    "/images/icons/favicon-32x32.png",
                 tag:      "mypai-msg-" + roomId,
                 renotify: "true",
                 silent:   isMute ? "true" : "false",
-                vibrate:  isMute ? "[]" : (isVibrate ? "[200,100,200]" : "[200,100,200]")
+                vibrate:  isMute ? "[]" : (isVibrate ? "[200,100,200]" : "[]")
               },
               fcm_options: { link: "/" }
             }
