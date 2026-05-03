@@ -13,7 +13,6 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="마이파이">
   <meta name="theme-color" content="#4caf50">
-  <!-- iOS 홈 화면 아이콘 (사이즈별) -->
   <link rel="apple-touch-icon" sizes="120x120" href="images/icons/icon-120x120.png">
   <link rel="apple-touch-icon" sizes="152x152" href="images/icons/icon-152x152.png">
   <link rel="apple-touch-icon" sizes="167x167" href="images/icons/icon-167x167.png">
@@ -24,9 +23,16 @@
     html, body { width:100%; height:100%; margin:0; padding:0; background:#0b1220; overflow:hidden; }
     #appRoot { position:fixed; inset:0; }
     #messengerFrame { position:absolute; inset:0; width:100%; height:100%; border:0; background:#f4f6fb; }
+    /* 로그인 패널이 iframe 위로 뜨도록 */
     #loginPanel { z-index: 99999 !important; }
     .login-logo-floating { z-index: 100000 !important; }
-    #loginPanel .login-backdrop { background: rgba(0,0,0,0.72); }
+
+    /* 로그인 시 뒤 화면이 보이지 않도록 더 진한 딤 처리 */
+    #loginPanel .login-backdrop {
+      background: rgba(0,0,0,0.72);
+    }
+
+    /* 닫힘 상태(선택) */
     #closedOverlay {
       position:absolute; inset:0;
       display:none;
@@ -71,38 +77,27 @@
   <script src="js/ui.js"></script>
   <script src="js/login.js"></script>
   <script src="js/messenger-only.js"></script>
-
-  <!-- Firebase SDK (top-level 로드: iOS에서 Notification.requestPermission 정상 동작) -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
   <script>
-    // Firebase 초기화 (index.html top-level — iOS 알림 권한 요청용)
-    // games/social-messenger.html 내부의 Firebase와 별개로 동작하지 않도록
-    // 앱이 이미 초기화되어 있으면 재사용
-    (function() {
-      try {
-        if (!firebase.apps || firebase.apps.length === 0) {
-          firebase.initializeApp({
-            apiKey: "__FIREBASE_API_KEY__",
-            authDomain: "web-ghost-c447b.firebaseapp.com",
-            databaseURL: "https://web-ghost-c447b-default-rtdb.firebaseio.com",
-            projectId: "web-ghost-c447b",
-            storageBucket: "web-ghost-c447b.firebasestorage.app",
-            messagingSenderId: "198377381878",
-            appId: "1:198377381878:web:83b56b1b4d63138d27b1d7"
-          });
-        }
-      } catch(e) {
-        console.warn('[index] Firebase 초기화 오류:', e.message || e);
-      }
-    })();
+    // Service Worker 등록 (현재 페이지 경로를 기준으로 scope 자동 계산)
+    if ("serviceWorker" in navigator) {
+      var swScope = new URL("./", location.href).pathname;
+      navigator.serviceWorker.register("sw.js", { scope: swScope })
+        .then(function (reg) { console.log("[PWA] SW 등록:", reg.scope); })
+        .catch(function (e) { console.warn("[PWA] SW 등록 실패:", e.message); });
+    }
   </script>
 
-  <!-- FCM 푸시 토큰 관리 + PWA 배지 (top-level 로드 필수: iOS iframe 제한 우회) -->
-  <script src="js/fcm-push.js"></script>
-  <script src="js/pwa-manager.js"></script>
-
-  <!-- SW 등록은 pwa-manager.js의 registerSW()가 담당 -->
+  <script>
+    // iOS PWA: iframe 안에서 Notification.requestPermission() 무시됨
+    // fcm-push.js가 postMessage로 요청 → top에서 처리 → 결과 반환
+    window.addEventListener("message",function(e){
+      if(!e.data||e.data.type!=="fcm-request-permission")return;
+      if(!("Notification"in window))return;
+      Notification.requestPermission().then(function(p){
+        var f=document.getElementById("messengerFrame");
+        if(f&&f.contentWindow)f.contentWindow.postMessage({type:"fcm-permission-result",permission:p},"*");
+      });
+    });
+  </script>
 </body>
 </html>

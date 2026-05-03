@@ -904,7 +904,9 @@
   <script src="../js/signals.js"></script>
   <script src="../js/room-message-stream.js"></script>
   <script src="../js/firebase-rooms.js"></script>
-  <!-- fcm-push.js / pwa-manager.js 는 index.html(top-level)에서 로드됨 -->
+  <!-- FCM 푸시 토큰 관리 (pwa-manager 앞에 먼저 로드) -->
+  <script src="../js/fcm-push.js"></script>
+  <script src="../js/pwa-manager.js"></script>
   <script src="../js/profile-manager.js"></script>
   <script src="../js/social-messenger.js"></script>
 </body>
