@@ -74,9 +74,10 @@
   <script src="js/login.js"></script>
   <script src="js/messenger-only.js"></script>
   <script>
-    // Service Worker 등록 (루트에서 하면 scope가 전체 사이트)
+    // Service Worker 등록 (현재 페이지 경로를 기준으로 scope 자동 계산)
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js", { scope: "/test-messengerlabel/" })
+      var swScope = new URL("./", location.href).pathname;
+      navigator.serviceWorker.register("sw.js", { scope: swScope })
         .then(function (reg) { console.log("[PWA] SW 등록:", reg.scope); })
         .catch(function (e) { console.warn("[PWA] SW 등록 실패:", e.message); });
     }

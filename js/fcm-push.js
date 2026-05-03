@@ -218,12 +218,20 @@
     // Firebase 키 규칙: . # $ [ ] / 사용 불가 → _ 로 치환
     var safe     = userId.replace(/[.#$\[\]]/g, '_');
 
+    // 알림 모드를 DB에 함께 저장 → Apps Script가 push payload에 포함시켜 SW에 전달
+    var notifyMode = "sound";
+    try {
+      var _m = localStorage.getItem("mypai_notify_mode_v2");
+      if (_m === "vibrate" || _m === "mute" || _m === "sound") notifyMode = _m;
+    } catch (em) {}
+
     var payload = {
-      token:    token,
-      user_id:  userId,           // 발신자 본인 제외 판단용
-      nickname: nickname || userId,
-      rooms:    rooms.join(','),  // 방 구독 목록 (쉼표 구분 문자열)
-      ts:       Date.now()        // 마지막 갱신 시각
+      token:       token,
+      user_id:     userId,           // 발신자 본인 제외 판단용
+      nickname:    nickname || userId,
+      rooms:       rooms.join(','),  // 방 구독 목록 (쉼표 구분 문자열)
+      notify_mode: notifyMode,       // 알림 모드 (sound/vibrate/mute) — SW 진동/무음 제어용
+      ts:          Date.now()        // 마지막 갱신 시각
     };
 
     console.log('[FCM] 토큰 저장 시도 → fcm_tokens/' + safe, payload);

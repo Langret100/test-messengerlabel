@@ -119,15 +119,23 @@ self.addEventListener("push", function (e) {
   var scope   = self.registration.scope;
   var appUrl  = scope + "games/social-messenger.html";
 
+  // 알림 모드 읽기 (localStorage: mypai_notify_mode_v2)
+  // SW에서는 localStorage 직접 접근 불가 → clients.matchAll로 읽거나 기본값 사용
+  // 실제 모드는 클라이언트(앱)에서 data 필드로 전달할 수도 있지만,
+  // SW 단독 수신(앱 종료 시)을 위해 push payload의 data.notify_mode를 우선 사용
+  var notifyMode = (data.data && data.data.notify_mode) || "sound";
+  var isMute     = notifyMode === "mute";
+  var isVibrate  = notifyMode === "vibrate";
+
   var opts = {
     body:     body,
     icon:     icon,
     badge:    badge,
     tag:      tag,
     renotify: true,
-    silent:   false,
-    vibrate:  [200, 100, 200],
-    data:     { roomId: roomId, url: appUrl }
+    silent:   isMute,
+    vibrate:  (isMute ? [] : [200, 100, 200]),
+    data:     { roomId: roomId, url: appUrl, notifyMode: notifyMode }
   };
 
   e.waitUntil(

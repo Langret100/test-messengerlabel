@@ -2,7 +2,7 @@
   "name": "마이파이",
   "short_name": "마이파이",
   "description": "마이파이 메신저 앱",
-  "start_url": "/test-messengerlabel/games/social-messenger.html",
+  "start_url": "games/social-messenger.html",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#4caf50",
@@ -16,5 +16,5 @@
       "purpose": "any maskable"
     }
   ],
-  "scope": "/test-messengerlabel/"
+  "scope": "./"
 }

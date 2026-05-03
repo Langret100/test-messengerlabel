@@ -327,43 +327,44 @@ var NotifySound = (function () {
 })()
 
 var NotifySetting = (function () {
-  // 알림(띠리링 + 백그라운드 시스템 알림 시도) ON/OFF 설정
-  // - 기본값: 켜짐 (KEY가 없거나 "1"이면 켜짐, "0"이면 꺼짐)
-  // - 시스템 알림은 권한(granted)일 때 + 화면이 보이지 않을 때(document.hidden)만 "시도"합니다.
-  // - Service Worker / Push 는 사용하지 않습니다(앱이 실행 중일 때만 동작).
-  var KEY = "mypai_notify_enabled";
+  // ── 알림 모드: "sound"(알람소리+진동) | "vibrate"(진동만) | "mute"(무음, 배지만)
+  // 앱 배지(뱃지)는 모드에 관계없이 항상 동작합니다.
+  var MODE_KEY = "mypai_notify_mode_v2";
+  // 유효 모드 목록 (순환 순서)
+  var MODES = ["sound", "vibrate", "mute"];
 
   function getPermission() {
     if (!("Notification" in window)) return "unsupported";
     try { return Notification.permission || "default"; } catch (e) { return "default"; }
   }
 
-  function isEnabled() {
+  /* 현재 모드 반환 (기본값: "sound") */
+  function getMode() {
     try {
-      var v = localStorage.getItem(KEY);
-      if (v === null) {
-        // 최초 방문 시 기본 ON으로 초기화
-        try { localStorage.setItem(KEY, "1"); } catch (e2) {}
-        return true;
-      }
-      return v !== "0";
-    } catch (e) {
-      return true;
-    }
+      var v = localStorage.getItem(MODE_KEY);
+      if (MODES.indexOf(v) >= 0) return v;
+    } catch (e) {}
+    return "sound";
   }
 
-  function setEnabled(v) {
-    try { localStorage.setItem(KEY, v ? "1" : "0"); } catch (e) {}
+  /* 모드 저장 */
+  function setMode(mode) {
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
   }
 
+  /* 하위 호환: 알림이 완전히 꺼진 상태(mute)가 아니면 "활성"으로 간주 */
+  function isEnabled() {
+    return getMode() !== "mute";
+  }
+
+  /* 메뉴 버튼 라벨 */
   function getMenuLabel() {
+    var mode = getMode();
     var perm = getPermission();
-    var on = isEnabled();
-
-    if (perm === "denied") return on ? "🔔 알림: 켜짐(차단됨)" : "🔕 알림: 꺼짐(차단됨)";
-    if (perm === "unsupported") return on ? "🔔 알림: 켜짐(지원안함)" : "🔕 알림: 꺼짐(지원안함)";
-    if (perm === "default" && on) return "🔔 알림: 켜짐(권한 필요)";
-    return on ? "🔔 알림: 켜짐" : "🔕 알림: 꺼짐";
+    var denied = (perm === "denied" || perm === "unsupported");
+    if (mode === "sound")   return denied ? "🔔 알람소리(차단됨)" : "🔔 알람소리";
+    if (mode === "vibrate") return "📳 진동";
+    return "🔕 무음";
   }
 
   function requestPermission() {
@@ -378,42 +379,139 @@ var NotifySetting = (function () {
     });
   }
 
+  /* ── 모드 선택 팝업 표시 */
+  function showModeSheet(showStatus) {
+    // 이미 열려있으면 닫기
+    var existing = document.getElementById("notifyModeSheet");
+    if (existing) { existing.remove(); return; }
+
+    var overlay = document.createElement("div");
+    overlay.id = "notifyModeSheet";
+    overlay.style.cssText = [
+      "position:fixed;inset:0;z-index:99999;",
+      "display:flex;align-items:flex-end;justify-content:center;",
+      "background:rgba(0,0,0,0.45);"
+    ].join("");
+
+    var current = getMode();
+    var items = [
+      { mode: "sound",   icon: "🔔", label: "알람소리",    desc: "소리 + 진동" },
+      { mode: "vibrate", icon: "📳", label: "진동",        desc: "진동만 (무음)" },
+      { mode: "mute",    icon: "🔕", label: "무음",        desc: "배지만 표시" }
+    ];
+
+    var itemsHtml = items.map(function (item) {
+      var active = item.mode === current;
+      return [
+        "<button data-mode='" + item.mode + "' style='",
+        "display:flex;align-items:center;gap:14px;",
+        "width:100%;padding:15px 20px;border:0;cursor:pointer;",
+        "background:" + (active ? "rgba(59,130,246,0.15)" : "transparent") + ";",
+        "border-left:3px solid " + (active ? "#3b82f6" : "transparent") + ";",
+        "color:#f1f5f9;text-align:left;",
+        "'>",
+        "<span style='font-size:22px;'>" + item.icon + "</span>",
+        "<span style='flex:1;'>",
+        "<span style='display:block;font-size:15px;font-weight:" + (active ? "700" : "500") + ";'>" + item.label + "</span>",
+        "<span style='display:block;font-size:12px;color:#94a3b8;margin-top:2px;'>" + item.desc + "</span>",
+        "</span>",
+        active ? "<span style='color:#3b82f6;font-size:18px;'>✓</span>" : "",
+        "</button>"
+      ].join("");
+    }).join("<div style='height:1px;background:rgba(255,255,255,0.07);margin:0 20px;'></div>");
+
+    overlay.innerHTML = [
+      "<div style='",
+      "width:100%;max-width:480px;",
+      "background:#1e293b;",
+      "border-radius:20px 20px 0 0;",
+      "overflow:hidden;",
+      "box-shadow:0 -4px 40px rgba(0,0,0,0.5);",
+      "'>",
+      "<div style='padding:16px 20px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);'>",
+      "<span style='font-size:15px;font-weight:700;color:#f1f5f9;'>알림 설정</span>",
+      "<span style='font-size:11px;color:#64748b;'>앱 배지는 항상 켜져 있어요</span>",
+      "</div>",
+      itemsHtml,
+      "<div style='height:env(safe-area-inset-bottom,0px);'></div>",
+      "</div>"
+    ].join("");
+
+    // 모드 선택 클릭
+    overlay.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-mode]");
+      if (!btn) {
+        // 배경 클릭 → 닫기
+        if (e.target === overlay) overlay.remove();
+        return;
+      }
+      var mode = btn.getAttribute("data-mode");
+      setMode(mode);
+      overlay.remove();
+
+      // 알람소리 선택 시 권한 확인
+      if (mode === "sound") {
+        var perm = getPermission();
+        if (perm === "default") {
+          showStatus && showStatus("백그라운드 알림을 쓰려면 권한이 필요해요.");
+          requestPermission().then(function (p) {
+            if (p === "granted") showStatus && showStatus("🔔 알람소리로 설정됐어요.");
+            else if (p === "denied") showStatus && showStatus("브라우저에서 알림을 허용해 주세요.");
+          });
+        } else {
+          showStatus && showStatus("🔔 알람소리로 설정됐어요.");
+        }
+      } else if (mode === "vibrate") {
+        showStatus && showStatus("📳 진동으로 설정됐어요.");
+      } else {
+        showStatus && showStatus("🔕 무음으로 설정됐어요. (배지는 계속 표시)");
+      }
+
+      // 메뉴 라벨 즉시 갱신
+      if (window._notifyMenuBtn) {
+        window._notifyMenuBtn.textContent = getMenuLabel();
+      }
+      // FCM DB의 notify_mode 동기화 (Apps Script → SW push payload 갱신)
+      try {
+        if (window.FcmPush && typeof window.FcmPush.refreshRooms === "function") {
+          window.FcmPush.refreshRooms();
+        }
+      } catch (e) {}
+    });
+
+    document.body.appendChild(overlay);
+  }
+
+  /* ── toggle: 기존 API 호환용 — 팝업 열기 */
   function toggle(showStatus) {
-    var next = !isEnabled();
-    setEnabled(next);
+    showModeSheet(showStatus);
+    return Promise.resolve(isEnabled());
+  }
 
-    if (!next) {
-      showStatus && showStatus("알림을 껐어요.");
-      return Promise.resolve(false);
+  /* ── 포그라운드 메시지 수신 시 알림 처리 */
+  function handleIncoming(msg) {
+    var mode = getMode();
+    if (mode === "mute") return; // 무음: 배지만 (호출부에서 처리)
+
+    if (mode === "sound") {
+      // 소리 + 진동
+      if (window.NotifySound && typeof window.NotifySound.playDdiring === "function") {
+        window.NotifySound.playDdiring();
+      }
+    } else if (mode === "vibrate") {
+      // 진동만
+      if (window.NotifySound && typeof window.NotifySound.tryVibrate === "function") {
+        window.NotifySound.tryVibrate();
+      }
     }
 
-    // 켜는 경우: 시스템 알림은 권한이 있으면 백그라운드에서만 시도
-    var perm = getPermission();
-    if (perm === "default") {
-      // 사용자가 "알림 켜기"를 눌렀을 때만 권한 요청(자동 팝업 방지)
-      showStatus && showStatus("백그라운드 알림을 쓰려면 권한이 필요해요.");
-      return requestPermission().then(function (p) {
-        if (p === "granted") showStatus && showStatus("알림을 켰어요.");
-        else if (p === "denied") showStatus && showStatus("브라우저 설정에서 알림 허용이 필요해요.");
-        else showStatus && showStatus("알림 권한이 아직 없어요.");
-        return true;
-      });
-    }
-
-    if (perm === "denied") {
-      showStatus && showStatus("알림은 켜졌지만, 시스템 알림은 차단돼 있어요.");
-      return Promise.resolve(true);
-    }
-
-    showStatus && showStatus("알림을 켰어요.");
-    return Promise.resolve(true);
+    // 백그라운드 시스템 알림 (포그라운드에서는 생략)
+    maybeShow(msg);
   }
 
   function maybeShow(msg) {
-    if (!isEnabled()) return;
+    if (getMode() === "mute") return;
     if (getPermission() !== "granted") return;
-
-    // 보이는 상태에서는 시스템 알림 생략(중복 방지)
     try {
       if (typeof document !== "undefined" && document.visibilityState === "visible") return;
     } catch (e) {}
@@ -430,19 +528,15 @@ var NotifySetting = (function () {
       if (body.length > 80) body = body.slice(0, 77) + "...";
     } catch (e2) {}
 
-    var opts = {
-      body: body,
-      tag: "mypai-social-chat",
-      renotify: true
-    };
-
-    try { new Notification(title, opts); } catch (e3) {}
+    try { new Notification(title, { body: body, tag: "mypai-social-chat", renotify: true }); } catch (e3) {}
   }
 
   return {
     isEnabled: isEnabled,
+    getMode: getMode,
     getMenuLabel: getMenuLabel,
     toggle: toggle,
+    handleIncoming: handleIncoming,
     maybeShow: maybeShow
   };
 })();
@@ -687,11 +781,10 @@ window.NotifySetting = NotifySetting; // profile-manager 등 외부에서 접근
           try {
             if (msg2.user_id && String(msg2.user_id) !== String(myId || "") &&
                 (Date.now() - subStartTs) > 1500) {
-              if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
-                NotifySound.playDdiring(); // 소리 + 진동 (내부에서 tryVibrate 포함)
-                if (NotifySetting.maybeShow) NotifySetting.maybeShow(msg2);
+              if (NotifySetting && NotifySetting.getMode && NotifySetting.getMode() !== "mute") {
+                NotifySetting.handleIncoming(msg2); // 모드에 따라 소리/진동/무음 처리
               }
-              // 알림이 꺼진 경우 진동/소리 모두 생략
+              // 무음 모드인 경우 진동/소리 모두 생략 (배지는 아래에서 별도 처리)
             }
           } catch (eSound) {}
 
@@ -2113,9 +2206,15 @@ try {
                     }
                   } catch (ePwa) {}
 
-                  if (NotifySetting && NotifySetting.isEnabled && NotifySetting.isEnabled()) {
-                    NotifySound.playDdiring(); // 소리 + 진동
-                    if (NotifySetting.maybeShow) {
+                  if (NotifySetting && NotifySetting.getMode && NotifySetting.getMode() !== "mute") {
+                    NotifySetting.handleIncoming && NotifySetting.handleIncoming({
+                      room_id: info.roomId,
+                      user_id: info.user_id || (info.signal && info.signal.user_id) || "",
+                      ts:      info.ts,
+                      nickname: (info.signal && info.signal.nickname) || "알림",
+                      text:    (info.signal && info.signal.text) || "새 메시지"
+                    });
+                    if (false && NotifySetting.maybeShow) {  // handleIncoming 내부에서 처리됨
                       var _sig = (info.signal) || {};
                       NotifySetting.maybeShow({
                         room_id: info.roomId,

@@ -32,7 +32,10 @@
         }
       }
       // 기존 SW 없으면 등록 시도
-      return navigator.serviceWorker.register(SW_PATH, { scope: "/test-messengerlabel/" })
+      var _swScope = (function() {
+        try { return new URL("../", location.href).pathname; } catch(e) { return "/"; }
+      })();
+      return navigator.serviceWorker.register(SW_PATH, { scope: _swScope })
         .then(function (reg) {
           swReg = reg;
           console.log("[PWA] SW 신규 등록:", reg.scope);
