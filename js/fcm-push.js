@@ -273,9 +273,8 @@
     }
     _userId = newUserId;
 
-    // 이미 초기화 완료 상태: DB 갱신만 (중복 requestToken 방지)
+    // 이미 초기화 완료 상태: DB 갱신 불필요 (토큰 동일)
     if (_initialized && _token) {
-      saveTokenToDb(_token, _userId);
       return;
     }
 

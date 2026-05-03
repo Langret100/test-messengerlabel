@@ -20,12 +20,6 @@
     },
     "rooms": {
       "$roomId": { ".read": true, ".write": true }
-    },
-    "fcm_tokens": {
-      "$userId": { ".read": true, ".write": true }
-    },
-    "fcm_active_room": {
-      "$userId": { ".read": true, ".write": true }
     }
   }
 }

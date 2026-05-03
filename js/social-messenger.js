@@ -2310,7 +2310,7 @@ attachEvents();
    *   2) 해당 방을 한 번도 방문하지 않은 유저 → ghostRoomVisited_v1 기준
    *      (방 목록에 없는 방의 알림은 무관한 사람에게 안 보냄)
    *   3) 현재 이 방을 열고 있는 유저 → /fcm_active_room/{userId} 의
-   *      room_id와 현재 방이 같고 visible===true 이면 제외
+   *      room_id와 현재 방이 같고 30초 이내 활성이면 제외
    *      (이미 보고 있는 사람에게 알림 중복 발송 방지)
    */
   function __sendFcmPushNotify(roomId, senderNick, text) {
@@ -2327,10 +2327,20 @@ attachEvents();
       console.log("[FCM] 푸시 발송 시작:", roomId, senderNick, text);
 
       /* ── 내 활성 방 정보 DB에 기록 ─────────────────────────
-         __setActiveVisible() 로 통합 관리.
-         visible: !document.hidden — 실제로 화면을 보고 있을 때만 true.
+         DB 경로: /fcm_active_room/{safe_userId} = { room_id, ts }
+         수신 측 필터링 시 이 정보로 "현재 방을 보고 있는 유저" 판단.
+         safe_userId: Firebase 키 규칙상 . # $ [ ] → _ 치환 필요.
       ─────────────────────────────────────────────────────── */
-      __setActiveVisible(roomId, !document.hidden);
+      if (myId) {
+        var safeId = String(myId).replace(/[.#$\[\]]/g, "_");
+        var activeRef = db.ref("fcm_active_room/" + safeId);
+        activeRef.set({
+          room_id: roomId || "",
+          ts:      Date.now()
+        }).catch(function(){});
+        // 앱/브라우저 종료 시 Firebase가 자동으로 삭제 (오프라인 감지)
+        activeRef.onDisconnect().remove().catch(function(){});
+      }
 
       /* ── 토큰 목록 + 활성 방 정보 병렬 조회 ────────────────
          Promise.all로 두 DB 경로를 동시에 읽어 레이턴시 최소화.
@@ -2347,15 +2357,14 @@ attachEvents();
 
         /* ── 현재 이 방을 열고 있는 유저 ID Set 구성 ──────────
            activeInRoom[safe_userId] = true 이면 해당 유저는 발송 제외.
-           조건: visible===true AND 현재 roomId와 동일한 방
-           (Page Visibility 기반 — 앱 내림/탭전환 즉시 DB 삭제됨)
+           조건: 30초 이내 활성 기록 AND 현재 roomId와 동일한 방
         ─────────────────────────────────────────────────────── */
         var activeInRoom = {};
         activeSnap.forEach(function (child) {
           var v   = child.val() || {};
-          // visible === true 이고 현재 발송 방과 동일한 방일 때만 제외
-          // (Page Visibility API 기반 — 창을 내리거나 탭 전환 시 자동으로 false/삭제됨)
-          if (v.visible === true && String(v.room_id) === String(roomId)) {
+          var age = Date.now() - (v.ts || 0);
+          // 30초(30000ms) 이내 활성이고, 현재 발송 방과 동일한 방
+          if (age < 30000 && String(v.room_id) === String(roomId)) {
             activeInRoom[child.key] = true;
           }
         });
@@ -2472,59 +2481,40 @@ attachEvents();
     } catch (e) {}
   }
 
-  /* ── 방 이동 + Page Visibility 연동으로 fcm_active_room 관리 ──
-     "현재 이 방을 실제로 보고 있는지" 를 DB에 실시간 반영.
+  /* ── 방 이동 시 /fcm_active_room 자동 갱신 패치 ──────────────
+     switchRoom()이 호출될 때마다 /fcm_active_room/{userId}.room_id 를 갱신.
+     이 정보로 __sendFcmPushNotify 에서 "현재 방을 열고 있는 유저" 를 판단해
+     이미 보고 있는 사람에게 중복 알림이 가지 않도록 제외함.
 
-     기존 방식(30초 타임스탬프)의 문제:
-       - 방을 열고 앱을 내려도 30초간 "보고 있음"으로 처리 → 알림 미발송
-       - 다른 탭/앱으로 이동해도 마찬가지
-
-     새 방식(visible 플래그):
-       - 창이 실제로 보이면 visible: true
-       - 창 숨김(백그라운드, 탭 전환, 화면 끔) → visible: false 또는 DB 삭제
-       - 브라우저 종료/네트워크 끊김 → onDisconnect().remove() 로 자동 삭제
+     패치 방식:
+       원본 switchRoom 함수를 __origSwitchRoomForFcm 에 보관 후,
+       래퍼 함수로 교체 → DB 갱신 후 원본 함수 호출 (Decorator 패턴).
+     init() 이후 500ms 딜레이: switchRoom 함수가 완전히 정의된 뒤 패치.
   ─────────────────────────────────────────────────────────── */
   var __origSwitchRoomForFcm = null;
-  var __fcmActiveRef = null; // 현재 유저의 fcm_active_room DB 참조 (재사용)
-
-  function __setActiveVisible(roomId, isVisible) {
-    if (!myId) return;
-    try {
-      var db2 = ensureFirebase();
-      if (!db2) return;
-      var safeId2 = String(myId).replace(/[.#$\[\]]/g, '_');
-      if (!__fcmActiveRef) {
-        __fcmActiveRef = db2.ref('fcm_active_room/' + safeId2);
-        // 브라우저 종료 / 네트워크 끊김 시 자동 삭제
-        __fcmActiveRef.onDisconnect().remove().catch(function(){});
-      }
-      if (isVisible && roomId) {
-        __fcmActiveRef.set({ room_id: String(roomId), visible: true, ts: Date.now() }).catch(function(){});
-      } else {
-        // 안 보이는 상태 → 즉시 삭제 (알림 대상에 포함되도록)
-        __fcmActiveRef.remove().catch(function(){});
-      }
-    } catch (e2) {}
-  }
-
   function __patchSwitchRoomForFcm() {
-    if (typeof switchRoom !== 'function' || __origSwitchRoomForFcm) return;
+    if (typeof switchRoom !== "function" || __origSwitchRoomForFcm) return;
     __origSwitchRoomForFcm = switchRoom;
     switchRoom = function (roomId, roomInfo) {
-      // 방 이동 시 현재 방 + 화면 보임 여부 갱신
-      var isVisible = !document.hidden;
-      __setActiveVisible(roomId, isVisible);
-      return __origSwitchRoomForFcm.apply(this, arguments);
+      // 방 이동 시 내 활성 방 정보 갱신 (알림 수신 제외 판단용)
+      if (myId && roomId) {
+        try {
+          var db2 = ensureFirebase();
+          if (db2) {
+            var safeId2 = String(myId).replace(/[.#$\[\]]/g, "_");
+            var activeRef2 = db2.ref("fcm_active_room/" + safeId2);
+            activeRef2.set({
+              room_id: String(roomId), // 현재 입장한 방 ID
+              ts:      Date.now()      // 활성 시각 (30초 기준 만료 판단)
+            }).catch(function(){});
+            activeRef2.onDisconnect().remove().catch(function(){});
+          }
+        } catch (e2) {}
+      }
+      return __origSwitchRoomForFcm.apply(this, arguments); // 원본 함수 실행
     };
   }
-  setTimeout(__patchSwitchRoomForFcm, 500);
-
-  // Page Visibility 변경 감지 — 핵심 로직
-  // 화면을 내리거나, 탭 전환, 다른 앱으로 이동하면 즉시 DB에서 제거
-  document.addEventListener('visibilitychange', function () {
-    var roomId = (typeof currentRoomId !== 'undefined') ? currentRoomId : null;
-    __setActiveVisible(roomId, !document.hidden);
-  });
+  setTimeout(__patchSwitchRoomForFcm, 500); // init() 완료 후 패치
 
   /* ── sw.js → 앱 메시지 수신 처리 ────────────────────────────
      FCM 알림 클릭 시 sw.js 가 clients.postMessage()로 메시지 전송.
