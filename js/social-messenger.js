@@ -2214,16 +2214,7 @@ try {
                       nickname: (info.signal && info.signal.nickname) || "알림",
                       text:    (info.signal && info.signal.text) || "새 메시지"
                     });
-                    if (false && NotifySetting.maybeShow) {  // handleIncoming 내부에서 처리됨
-                      var _sig = (info.signal) || {};
-                      NotifySetting.maybeShow({
-                        room_id: info.roomId,
-                        user_id: info.user_id || _sig.user_id || "",
-                        ts:      info.ts,
-                        nickname: _sig.nickname || "알림",
-                        text:    _sig.text || "새 메시지"
-                      });
-                    }
+
                   }
                   // 알림이 꺼진 경우 진동/소리 모두 생략
                 }
@@ -2342,10 +2333,13 @@ attachEvents();
       ─────────────────────────────────────────────────────── */
       if (myId) {
         var safeId = String(myId).replace(/[.#$\[\]]/g, "_");
-        db.ref("fcm_active_room/" + safeId).set({
+        var activeRef = db.ref("fcm_active_room/" + safeId);
+        activeRef.set({
           room_id: roomId || "",
           ts:      Date.now()
         }).catch(function(){});
+        // 앱/브라우저 종료 시 Firebase가 자동으로 삭제 (오프라인 감지)
+        activeRef.onDisconnect().remove().catch(function(){});
       }
 
       /* ── 토큰 목록 + 활성 방 정보 병렬 조회 ────────────────
@@ -2508,10 +2502,12 @@ attachEvents();
           var db2 = ensureFirebase();
           if (db2) {
             var safeId2 = String(myId).replace(/[.#$\[\]]/g, "_");
-            db2.ref("fcm_active_room/" + safeId2).set({
+            var activeRef2 = db2.ref("fcm_active_room/" + safeId2);
+            activeRef2.set({
               room_id: String(roomId), // 현재 입장한 방 ID
               ts:      Date.now()      // 활성 시각 (30초 기준 만료 판단)
             }).catch(function(){});
+            activeRef2.onDisconnect().remove().catch(function(){});
           }
         } catch (e2) {}
       }
