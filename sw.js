@@ -176,6 +176,9 @@ self.addEventListener("push", function (e) {
         var tasks = [];
 
         if (!isForeground) {
+          // 백그라운드일 때만 시스템 알림 표시 (포그라운드는 social-messenger.js가 직접 처리)
+          // [버그 수정] 포그라운드일 때는 showNotification 생략 → opts.vibrate도 자동 무효
+          // → 포그라운드 알람/진동은 child_added → handleIncoming()에서 1회만 처리
           tasks.push(self.registration.showNotification(title, opts));
         }
 

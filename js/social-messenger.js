@@ -311,8 +311,10 @@ var NotifySound = (function () {
       console.warn("[알람] 재생 오류:", e);
     }
 
-    // ── 진동은 항상 시도
-    tryVibrate();
+    // ── [버그 수정] 진동은 sound 모드일 때만 함께 시도
+    // 이전 코드: tryVibrate()를 무조건 실행 → mute/vibrate 모드 구분 없이 항상 진동 발생
+    // 수정 후: playDdiring()은 소리 전용. 진동이 필요하면 호출부(handleIncoming)에서 명시적으로 tryVibrate() 호출
+    // (handleIncoming에서 sound면 playDdiring, vibrate면 tryVibrate만 호출하도록 분기되어 있음)
 
     return soundPlayed;
   }
@@ -488,9 +490,13 @@ var NotifySetting = (function () {
     if (mode === "mute") return; // 무음: 배지만 (호출부에서 처리)
 
     if (mode === "sound") {
-      // 소리 + 진동
+      // 소리 재생
       if (window.NotifySound && typeof window.NotifySound.playDdiring === "function") {
         window.NotifySound.playDdiring();
+      }
+      // [버그 수정] sound 모드일 때만 진동도 함께 실행 (playDdiring에서 분리됨)
+      if (window.NotifySound && typeof window.NotifySound.tryVibrate === "function") {
+        window.NotifySound.tryVibrate();
       }
     } else if (mode === "vibrate") {
       // 진동만
@@ -2341,7 +2347,23 @@ attachEvents();
            activeInRoom[safe_userId] = true 이면 해당 유저는 발송 제외.
            조건: 30초 이내 활성 기록 AND 현재 roomId와 동일한 방
         ─────────────────────────────────────────────────────── */
-        var activeInRoom = {}; // 제외 조건 비활성화 (양측 기기 동시 사용 시 알림 누락 방지)
+        // [버그 수정] activeInRoom 제외 조건 재활성화
+        // 이전 코드: var activeInRoom = {}; // 비활성화 (양측 기기 동시 사용 시 알림 누락 방지)
+        // 문제: 내가 글을 쓰고 방을 나가도 나에게 알림이 오는 문제 발생
+        // 수정: activeSnap에서 실제 데이터를 읽어 현재 방에 있는 유저 제외
+        var activeInRoom = {};
+        try {
+          var activeVal = activeSnap.val() || {};
+          var now30 = Date.now();
+          Object.keys(activeVal).forEach(function (safeUid) {
+            var entry = activeVal[safeUid];
+            if (!entry) return;
+            // 30초 이내 활성 + 현재 roomId와 같은 방에 있는 유저 제외
+            if (entry.room_id === roomId && (now30 - Number(entry.ts || 0)) < 30000) {
+              activeInRoom[safeUid] = true;
+            }
+          });
+        } catch (eActive) {}
 
         /* ── 발송 대상 토큰 필터링 ───────────────────────────
            tokenSnap 전체를 순회하며 제외 조건을 하나씩 체크.
